@@ -52,6 +52,22 @@ npm start interactive       # Interactive mode for extended testing
 - `@anthropic-ai/claude-agent-sdk` - Agent framework
 - `@cyber/mcp-nmap-client` - Custom MCP client for Nmap (linked via yalc)
 
+## Environment Setup
+
+**MCP Client Dependency**: The `@cyber/mcp-nmap-client` is linked via yalc from a separate repo:
+```bash
+# In the mcp-nmap-client repo:
+npm run build && yalc publish
+
+# In this repo:
+yalc add @cyber/mcp-nmap-client
+npm install
+```
+
+**Environment Variables**:
+- `NMAP_SERVER_PATH` - Path to nmap MCP server (defaults to `../pentest-mcp-server/nmap-server-ts/dist/index.js`)
+- `ANTHROPIC_API_KEY` - Claude API key (required)
+
 ## Code Style
 
-Prettier configured: semicolons, ES5 trailing commas, single quotes, 100 char width, 2-space tabs
+Prettier configured: semicolons, ES5 trailing commas, single quotes, 100 char width, 2-space indent

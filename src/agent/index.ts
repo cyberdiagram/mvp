@@ -1,126 +1,170 @@
+// Main Orchestrator - Coordinates all subagents
+
 import { SkillsLoader } from './skillsLoader.js';
-import { Reasoner } from './reasoner.js';
-import { MCPExecutor } from './executor.js';
+import {
+  ReasonerAgent,
+  ExecutorAgent,
+  MCPAgent,
+  DataCleanerAgent,
+  CleanedData,
+} from './definitions/index.js';
 
 export interface AgentConfig {
   anthropicApiKey: string;
   skillsDir: string;
   mcpServers: {
     nmap: { path: string };
-    // Add others as needed
   };
 }
 
 export class PentestAgent {
-  private skillsLoader: SkillsLoader;
-  private reasoner: Reasoner;
-  private executor: MCPExecutor;
   private config: AgentConfig;
+
+  // Subagents
+  private skillsLoader: SkillsLoader;
+  private reasoner: ReasonerAgent;
+  private executor: ExecutorAgent;
+  private mcpAgent: MCPAgent;
+  private dataCleaner: DataCleanerAgent;
 
   constructor(config: AgentConfig) {
     this.config = config;
     this.skillsLoader = new SkillsLoader(config.skillsDir);
-    this.reasoner = new Reasoner(config.anthropicApiKey, this.skillsLoader);
-    this.executor = new MCPExecutor();
+    this.reasoner = new ReasonerAgent(config.anthropicApiKey);
+    this.executor = new ExecutorAgent(config.anthropicApiKey);
+    this.mcpAgent = new MCPAgent();
+    this.dataCleaner = new DataCleanerAgent(config.anthropicApiKey);
   }
 
-  /**
-   * Initialize the agent
-   */
   async initialize(): Promise<void> {
-    console.log('[Agent] Initializing...');
-    
+    console.log('[Orchestrator] Initializing multi-agent system...');
+
     // Load skills
     await this.skillsLoader.loadSkills();
-    console.log('[Agent] ✓ Skills loaded');
-    
-    // Initialize MCP clients
-    await this.executor.initialize({
+    const skillContext = this.skillsLoader.buildSkillContext('reconnaissance pentest');
+    this.reasoner.setSkillContext(skillContext);
+    console.log('[Orchestrator] ✓ Skills loaded');
+
+    // Initialize MCP Agent
+    await this.mcpAgent.initialize({
       servers: this.config.mcpServers,
     });
-    console.log('[Agent] ✓ MCP servers connected');
-    
-    console.log('[Agent] Ready!');
+    console.log('[Orchestrator] ✓ MCP Agent initialized');
+
+    console.log('[Orchestrator] Ready!');
+    console.log('[Orchestrator] Subagents: Reasoner (sonnet), Executor (haiku), MCP Agent, Data Cleaner (haiku)');
   }
 
-  /**
-   * Execute a reconnaissance mission on a target
-   */
   async reconnaissance(target: string): Promise<void> {
-    console.log(`\n[Agent] Starting reconnaissance on: ${target}`);
-    console.log('=' .repeat(60));
+    console.log(`\n[Orchestrator] Starting reconnaissance on: ${target}`);
+    console.log('='.repeat(60));
 
-    let context = `Target: ${target}`;
-    let maxIterations = 10;
+    this.reasoner.reset();
     let iteration = 0;
+    const maxIterations = 15;
+    let aggregatedResults: CleanedData[] = [];
+
+    // Initial observation to Reasoner
+    let observation = `Starting reconnaissance mission on target: ${target}`;
 
     while (iteration < maxIterations) {
       iteration++;
-      console.log(`\n[Agent] Iteration ${iteration}`);
-      console.log('-'.repeat(60));
+      console.log(`\n[Orchestrator] === Iteration ${iteration} ===`);
 
-      // Step 1: Reason about what to do
-      const reasoning = await this.reasoner.reason(
-        `I am performing reconnaissance on ${target}`,
-        context
-      );
+      // Step 1: REASONER - Strategic planning
+      console.log('\n[Reasoner] Analyzing situation...');
+      const reasoning = await this.reasoner.reason(observation);
 
-      console.log(`[Agent] Thought: ${reasoning.thought}`);
-      console.log(`[Agent] Action: ${reasoning.action}`);
+      console.log(`[Reasoner] Thought: ${reasoning.thought}`);
+      console.log(`[Reasoner] Action: ${reasoning.action}`);
 
-      // Step 2: Execute tool if specified
-      if (reasoning.tool && reasoning.arguments) {
-        console.log(`[Agent] Calling tool: ${reasoning.tool}`);
-        
-        const result = await this.executor.executeTool({
-          tool: reasoning.tool,
-          arguments: reasoning.arguments,
-        });
+      // Check if mission is complete
+      if (reasoning.is_complete) {
+        console.log('\n[Orchestrator] Reasoner indicates mission complete');
+        break;
+      }
 
-        if (result.success) {
-          console.log(`[Agent] ✓ Tool execution successful`);
-          console.log(`[Agent] Output preview: ${result.output.substring(0, 200)}...`);
-          
-          // Add result to context for next iteration
-          context += `\n\nLast action: ${reasoning.action}\nResult: ${result.output.substring(0, 500)}`;
+      // Step 2: EXECUTOR - Break down into steps
+      console.log('\n[Executor] Planning execution...');
+      const plan = await this.executor.planExecution(reasoning);
+
+      if (plan.steps.length === 0) {
+        console.log('[Executor] No executable steps. Continuing analysis...');
+        observation = 'No tools to execute. Continue with analysis or indicate completion.';
+        continue;
+      }
+
+      console.log(`[Executor] Plan: ${plan.steps.length} step(s)`);
+      plan.steps.forEach((step, i) => {
+        console.log(`  ${i + 1}. ${step.tool}: ${step.description}`);
+      });
+
+      // Step 3: Execute each step via MCP Agent and clean with Data Cleaner
+      let currentPlan = { ...plan };
+
+      while (true) {
+        const step = this.executor.getNextStep(currentPlan);
+        if (!step) break;
+
+        // MCP Agent executes tool
+        console.log(`\n[MCP Agent] Executing: ${step.tool}`);
+        const rawResult = await this.mcpAgent.executeTool(step);
+
+        if (rawResult.success) {
+          console.log('[MCP Agent] ✓ Execution successful');
+
+          // Data Cleaner processes raw output
+          console.log('[Data Cleaner] Parsing output...');
+          const cleanedData = await this.dataCleaner.clean(rawResult.output, step.tool);
+          console.log(`[Data Cleaner] ✓ Type: ${cleanedData.type}`);
+          console.log(`[Data Cleaner] Summary: ${cleanedData.summary}`);
+
+          aggregatedResults.push(cleanedData);
         } else {
-          console.log(`[Agent] ✗ Tool execution failed: ${result.error}`);
-          context += `\n\nLast action failed: ${result.error}`;
+          console.log(`[MCP Agent] ✗ Execution failed: ${rawResult.error}`);
         }
+
+        currentPlan = this.executor.advancePlan(currentPlan);
+      }
+
+      // Step 4: Feed cleaned results back to Reasoner
+      const lastResult = aggregatedResults[aggregatedResults.length - 1];
+      if (lastResult) {
+        observation = `Tool execution completed.\nResult: ${JSON.stringify(lastResult.data, null, 2)}\nSummary: ${lastResult.summary}`;
+        this.reasoner.addObservation(observation);
       } else {
-        // No tool to execute, agent is thinking or done
-        console.log(`[Agent] No tool to execute. Analysis phase.`);
-        
-        // Check if agent indicates it's done
-        if (reasoning.action.toLowerCase().includes('done') || 
-            reasoning.action.toLowerCase().includes('complete')) {
-          console.log('[Agent] Mission complete!');
-          break;
-        }
+        observation = 'Tool execution completed but no results obtained.';
       }
 
       // Small delay between iterations
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
     console.log('\n' + '='.repeat(60));
-    console.log('[Agent] Reconnaissance finished');
+    console.log('[Orchestrator] Reconnaissance finished');
+    console.log(`[Orchestrator] Total iterations: ${iteration}`);
+    console.log(`[Orchestrator] Results collected: ${aggregatedResults.length}`);
+
+    // Print summary
+    if (aggregatedResults.length > 0) {
+      console.log('\n[Orchestrator] === Summary ===');
+      aggregatedResults.forEach((result, i) => {
+        console.log(`${i + 1}. [${result.type}] ${result.summary}`);
+      });
+    }
   }
 
-  /**
-   * Interactive mode - chat with the agent
-   */
   async interactive(): Promise<void> {
-    const readline = require('readline');
+    const readline = await import('readline');
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
     });
 
-    console.log('\n[Agent] Interactive mode started. Type your queries.');
-    console.log('[Agent] Type "exit" to quit.\n');
+    console.log('\n[Orchestrator] Interactive mode started.');
+    console.log('[Orchestrator] Type your queries. Type "exit" to quit.\n');
 
-    const prompt = () => {
+    const prompt = (): void => {
       rl.question('You: ', async (input: string) => {
         if (input.toLowerCase() === 'exit') {
           rl.close();
@@ -128,29 +172,36 @@ export class PentestAgent {
         }
 
         try {
+          // Get reasoning from Reasoner
           const reasoning = await this.reasoner.reason(input);
-          
-          console.log(`\n[Agent] Thought: ${reasoning.thought}`);
-          console.log(`[Agent] Action: ${reasoning.action}`);
+          console.log(`\n[Reasoner] Thought: ${reasoning.thought}`);
+          console.log(`[Reasoner] Action: ${reasoning.action}`);
 
+          // Execute if there's a tool call
           if (reasoning.tool && reasoning.arguments) {
-            console.log(`[Agent] Executing: ${reasoning.tool}...`);
-            
-            const result = await this.executor.executeTool({
-              tool: reasoning.tool,
-              arguments: reasoning.arguments,
-            });
+            const plan = await this.executor.planExecution(reasoning);
+            const step = this.executor.getNextStep(plan);
 
-            if (result.success) {
-              console.log(`[Agent] Result:\n${result.output.substring(0, 500)}...\n`);
-            } else {
-              console.log(`[Agent] Error: ${result.error}\n`);
+            if (step) {
+              console.log(`\n[MCP Agent] Executing: ${step.tool}...`);
+              const result = await this.mcpAgent.executeTool(step);
+
+              if (result.success) {
+                const cleaned = await this.dataCleaner.clean(result.output, step.tool);
+                console.log(`\n[Data Cleaner] ${cleaned.summary}`);
+                console.log(`[Data Cleaner] Data: ${JSON.stringify(cleaned.data, null, 2).substring(0, 500)}...`);
+                this.reasoner.addObservation(`Result: ${cleaned.summary}`);
+              } else {
+                console.log(`[MCP Agent] Error: ${result.error}`);
+              }
             }
           }
-        } catch (error: any) {
-          console.error('[Agent] Error:', error.message);
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error('[Orchestrator] Error:', errorMessage);
         }
 
+        console.log('');
         prompt();
       });
     };
@@ -158,11 +209,8 @@ export class PentestAgent {
     prompt();
   }
 
-  /**
-   * Shutdown the agent
-   */
   async shutdown(): Promise<void> {
-    await this.executor.shutdown();
-    console.log('[Agent] Shutdown complete');
+    await this.mcpAgent.shutdown();
+    console.log('[Orchestrator] Shutdown complete');
   }
 }

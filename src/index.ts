@@ -1,18 +1,20 @@
 import path from 'path';
-import { config } from "./config";
 import { PentestAgent } from './agent/index.js';
-// import * as dotenv from 'dotenv';
-
-// dotenv.config();
 
 async function main() {
+  const nmapPath =
+    process.env.NMAP_SERVER_PATH ||
+    path.resolve('../pentest-mcp-server/nmap-server-ts/dist/index.js');
 
-  const nmapPath = process.env.NMAP_SERVER_PATH || path.resolve('../pentest-mcp/nmap-server-ts/dist/index.js');
-  const anthropicApiKey ="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";
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  if (!anthropicApiKey) {
+    console.error('Error: ANTHROPIC_API_KEY environment variable is required');
+    process.exit(1);
+  }
 
   // Configuration
   const config = {
-    anthropicApiKey:anthropicApiKey,
+    anthropicApiKey,
     skillsDir: path.resolve('./src/skills'),
     mcpServers: {
       nmap: {
