@@ -11,3 +11,15 @@ __pycache__/
 
 # OS files
 .DS_Store
+
+# Node
+node_modules/
+dist/
+lib/
+
+# Yalc
+.yalc/
+yalc.lock
+
+# Claude Code
+.claude/
