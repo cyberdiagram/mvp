@@ -17,16 +17,36 @@ export interface AgentConfig {
   };
 }
 
+/**
+ * PentestAgent - Main orchestrator for the multi-agent penetration testing system.
+ *
+ * This class coordinates four specialized subagents:
+ * - ReasonerAgent (Sonnet): Strategic brain that decides what actions to take
+ * - ExecutorAgent (Haiku): Breaks high-level plans into executable tool steps
+ * - MCPAgent: Executes actual security tools via MCP protocol (Nmap, etc.)
+ * - DataCleanerAgent (Haiku): Parses raw tool output into structured JSON
+ *
+ * The agent follows an iterative loop:
+ * Reasoner → Executor → MCP → DataCleaner → back to Reasoner with results
+ */
 export class PentestAgent {
   private config: AgentConfig;
 
-  // Subagents
+  // Subagents : ReasonerAgent , ExecutorAgent , MCPAgent , DataCleanerAgent
   private skillsLoader: SkillsLoader;
   private reasoner: ReasonerAgent;
   private executor: ExecutorAgent;
   private mcpAgent: MCPAgent;
   private dataCleaner: DataCleanerAgent;
 
+  /**
+   * Creates a new PentestAgent with all subagents.
+   *
+   * @param config - Configuration object containing:
+   *   - anthropicApiKey: API key for Claude API calls
+   *   - skillsDir: Path to skill markdown files
+   *   - mcpServers: Paths to MCP server executables (nmap, etc.)
+   */
   constructor(config: AgentConfig) {
     this.config = config;
     this.skillsLoader = new SkillsLoader(config.skillsDir);
@@ -36,6 +56,16 @@ export class PentestAgent {
     this.dataCleaner = new DataCleanerAgent(config.anthropicApiKey);
   }
 
+  /**
+   * Initializes the multi-agent system.
+   *
+   * This method:
+   * 1. Loads skill documents from markdown files (e.g., nmap_skill.md)
+   * 2. Builds skill context and injects it into the Reasoner's system prompt
+   * 3. Connects MCP Agent to security tool servers (Nmap, etc.)
+   *
+   * Must be called before reconnaissance() or interactive().
+   */
   async initialize(): Promise<void> {
     console.log('[Orchestrator] Initializing multi-agent system...');
 
@@ -52,9 +82,29 @@ export class PentestAgent {
     console.log('[Orchestrator] ✓ MCP Agent initialized');
 
     console.log('[Orchestrator] Ready!');
-    console.log('[Orchestrator] Subagents: Reasoner (sonnet), Executor (haiku), MCP Agent, Data Cleaner (haiku)');
+    console.log(
+      '[Orchestrator] Subagents: Reasoner (sonnet), Executor (haiku), MCP Agent, Data Cleaner (haiku)'
+    );
   }
 
+  /**
+   * Runs automated reconnaissance on a target.
+   *
+   * This is the main agent loop that:
+   * 1. Sends observations to Reasoner → gets strategic decisions
+   * 2. Passes decisions to Executor → breaks into tool steps
+   * 3. Executes each step via MCP Agent → gets raw output
+   * 4. Cleans output via DataCleaner → structured JSON
+   * 5. Feeds results back to Reasoner → continues until complete
+   *
+   * The loop runs up to 15 iterations or until Reasoner sets is_complete=true.
+   *
+   * @param target - The target to scan (IP address, hostname, or CIDR range)
+   *
+   * @example
+   * await agent.reconnaissance('192.168.1.0/24');  // Scan a subnet
+   * await agent.reconnaissance('scanme.nmap.org'); // Scan a single host
+   */
   async reconnaissance(target: string): Promise<void> {
     console.log(`\n[Orchestrator] Starting reconnaissance on: ${target}`);
     console.log('='.repeat(60));
@@ -154,6 +204,21 @@ export class PentestAgent {
     }
   }
 
+  /**
+   * Starts an interactive REPL (Read-Eval-Print Loop) mode.
+   *
+   * Allows users to:
+   * - Type natural language queries about security reconnaissance
+   * - The Reasoner interprets queries and suggests/executes tools
+   * - Results are displayed and conversation continues
+   *
+   * Type "exit" to quit interactive mode.
+   *
+   * @example
+   * You: Scan ports on 192.168.1.1
+   * [Reasoner] Thought: User wants a port scan...
+   * [MCP Agent] Executing: nmap_port_scan...
+   */
   async interactive(): Promise<void> {
     const readline = await import('readline');
     const rl = readline.createInterface({
@@ -189,7 +254,9 @@ export class PentestAgent {
               if (result.success) {
                 const cleaned = await this.dataCleaner.clean(result.output, step.tool);
                 console.log(`\n[Data Cleaner] ${cleaned.summary}`);
-                console.log(`[Data Cleaner] Data: ${JSON.stringify(cleaned.data, null, 2).substring(0, 500)}...`);
+                console.log(
+                  `[Data Cleaner] Data: ${JSON.stringify(cleaned.data, null, 2).substring(0, 500)}...`
+                );
                 this.reasoner.addObservation(`Result: ${cleaned.summary}`);
               } else {
                 console.log(`[MCP Agent] Error: ${result.error}`);
@@ -209,6 +276,12 @@ export class PentestAgent {
     prompt();
   }
 
+  /**
+   * Gracefully shuts down the agent and all connections.
+   *
+   * Disconnects all MCP clients (Nmap server, etc.) and releases resources.
+   * Should always be called when done using the agent.
+   */
   async shutdown(): Promise<void> {
     await this.mcpAgent.shutdown();
     console.log('[Orchestrator] Shutdown complete');

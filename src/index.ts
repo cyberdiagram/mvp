@@ -1,6 +1,21 @@
 import path from 'path';
 import { PentestAgent } from './agent/index.js';
 
+/**
+ * Main entry point for the pentest agent CLI application.
+ *
+ * This function:
+ * 1. Loads configuration from environment variables (NMAP_SERVER_PATH, ANTHROPIC_API_KEY)
+ * 2. Creates and initializes the PentestAgent with MCP server connections
+ * 3. Parses CLI arguments to determine which mode to run:
+ *    - "recon <target>" - runs automated reconnaissance on the target
+ *    - "interactive" - starts an interactive REPL for manual commands
+ * 4. Gracefully shuts down the agent when finished
+ *
+ * @example
+ * npm start recon 192.168.1.0/24   // Run recon on a subnet
+ * npm start interactive            // Start interactive mode
+ */
 async function main() {
   const nmapPath =
     process.env.NMAP_SERVER_PATH ||

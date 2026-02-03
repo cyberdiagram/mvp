@@ -28,12 +28,12 @@ An AI-powered penetration testing agent using Claude AI with a multi-agent archi
 
 ### Subagents
 
-| Agent | Model | Purpose |
-|-------|-------|---------|
-| **Reasoner** | claude-sonnet-4 | Strategic attack planning, interprets results |
-| **Executor** | claude-3-5-haiku | Breaks plans into executable steps |
-| **MCP Agent** | - | Executes nmap tools via MCP protocol |
-| **Data Cleaner** | claude-3-5-haiku | Parses raw output into structured JSON |
+| Agent            | Model            | Purpose                                       |
+| ---------------- | ---------------- | --------------------------------------------- |
+| **Reasoner**     | claude-sonnet-4  | Strategic attack planning, interprets results |
+| **Executor**     | claude-3-5-haiku | Breaks plans into executable steps            |
+| **MCP Agent**    | -                | Executes nmap tools via MCP protocol          |
+| **Data Cleaner** | claude-3-5-haiku | Parses raw output into structured JSON        |
 
 ## Project Structure
 
@@ -117,20 +117,19 @@ npm run build
 ### Local Development (Stdio)
 
 ```typescript
-const nmapServerPath = "/path/to/pentest-mcp-server/nmap-server-ts/dist/index.js";
+const nmapServerPath = '/path/to/pentest-mcp-server/nmap-server-ts/dist/index.js';
 ```
 
 ### Remote Mode (SSE) - Future
 
 ```typescript
-const transport = new SSEClientTransport(
-  new URL("https://your-mcp-server.com/sse")
-);
+const transport = new SSEClientTransport(new URL('https://your-mcp-server.com/sse'));
 ```
 
 ## Changelog
 
 ### 2026-02-03 - Multi-Agent Architecture
+
 - Implemented hierarchical multi-agent system
 - Added Reasoner (sonnet) for strategic planning
 - Added Executor (haiku) for workflow orchestration
@@ -138,3 +137,5 @@ const transport = new SSEClientTransport(
 - Added Data Cleaner (haiku) for parsing raw output
 - Removed legacy single-agent implementation
 - Environment variable for API key (removed hardcoded key)
+
+Target → Reasoner (decides action) → Executor (creates steps) → MCP Agent (runs tools) → DataCleaner (parses output) → back to Reasoner

@@ -1,11 +1,29 @@
-// Reasoner Subagent - Strategic brain for attack planning (sonnet)
+/**
+ * Reasoner Subagent - The strategic brain for attack planning.
+ *
+ * Uses Claude Sonnet (the most capable model) for complex reasoning about
+ * penetration testing strategy. Analyzes results, plans attacks, and
+ * decides which tools to use next.
+ */
 
 import Anthropic from '@anthropic-ai/sdk';
 import { ReasonerOutput } from './types.js';
 
+/** Model used for strategic reasoning - Sonnet for best decision quality */
 export const REASONER_MODEL = 'claude-sonnet-4-20250514';
+
+/** Max tokens for Reasoner responses - enough for detailed analysis */
 export const REASONER_MAX_TOKENS = 2000;
 
+/**
+ * System prompt that defines the Reasoner's role and behavior.
+ *
+ * Instructs the model to:
+ * - Act as a penetration testing strategist
+ * - Return structured JSON responses
+ * - Follow a methodology: broad discovery → specific scanning → deep analysis
+ * - Know about available tools (nmap_host_discovery, nmap_port_scan, etc.)
+ */
 export const REASONER_SYSTEM_PROMPT = `You are an expert penetration testing strategist. Your role is to:
 
 1. ANALYZE reconnaissance results and security findings
@@ -52,19 +70,59 @@ Set "is_complete": true when the reconnaissance/attack phase is finished.
 3. Service Detection on interesting ports → Find versions
 4. Analyze versions for known CVEs → Plan exploitation`;
 
+/**
+ * ReasonerAgent - Strategic decision-making subagent.
+ *
+ * The "brain" of the pentest agent that:
+ * - Maintains conversation history to track the reconnaissance progress
+ * - Analyzes tool results and determines next steps
+ * - Returns structured decisions (thought, action, tool, arguments)
+ * - Knows when the mission is complete
+ *
+ * Uses Claude Sonnet for highest quality reasoning.
+ */
 export class ReasonerAgent {
+  /** Anthropic API client */
   private client: Anthropic;
+  /** Conversation history for multi-turn reasoning */
   private conversationHistory: Anthropic.MessageParam[] = [];
+  /** Skill context injected into the system prompt */
   private skillContext: string = '';
 
+  /**
+   * Creates a new ReasonerAgent.
+   *
+   * @param apiKey - Anthropic API key for Claude API calls
+   */
   constructor(apiKey: string) {
     this.client = new Anthropic({ apiKey });
   }
 
+  /**
+   * Sets the skill context to inject into the system prompt.
+   *
+   * Skills provide domain expertise about specific tools (e.g., Nmap usage patterns).
+   *
+   * @param context - Formatted skill content from SkillsLoader.buildSkillContext()
+   */
   setSkillContext(context: string): void {
     this.skillContext = context;
   }
 
+  /**
+   * Analyzes the current situation and decides what to do next.
+   *
+   * Sends the observation to Claude Sonnet along with conversation history
+   * and skill context. Returns a structured decision about the next action.
+   *
+   * @param observation - The current situation or tool result to analyze
+   * @param additionalContext - Optional extra context to include
+   * @returns ReasonerOutput with thought, action, tool, arguments, and is_complete
+   *
+   * @example
+   * const decision = await reasoner.reason('Found open port 22 (SSH) on 192.168.1.1');
+   * // Returns: { thought: "SSH is open...", action: "Detect service version", tool: "nmap_service_detection", ... }
+   */
   async reason(observation: string, additionalContext?: string): Promise<ReasonerOutput> {
     const systemPrompt = this.skillContext
       ? `${REASONER_SYSTEM_PROMPT}\n\n# Loaded Skills\n\n${this.skillContext}`
@@ -99,6 +157,15 @@ export class ReasonerAgent {
     return this.parseResponse(assistantMessage.text);
   }
 
+  /**
+   * Parses the LLM response text into a structured ReasonerOutput.
+   *
+   * First tries to extract a JSON object from the response.
+   * Falls back to regex-based text parsing if JSON extraction fails.
+   *
+   * @param text - Raw text response from Claude
+   * @returns Structured ReasonerOutput object
+   */
   private parseResponse(text: string): ReasonerOutput {
     // Try to extract JSON
     const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -131,6 +198,14 @@ export class ReasonerAgent {
     };
   }
 
+  /**
+   * Adds a tool execution result to the conversation history.
+   *
+   * This allows the Reasoner to "remember" previous tool results
+   * and build upon them in subsequent reasoning calls.
+   *
+   * @param result - The result/observation to add to history
+   */
   addObservation(result: string): void {
     this.conversationHistory.push({
       role: 'user',
@@ -138,6 +213,12 @@ export class ReasonerAgent {
     });
   }
 
+  /**
+   * Clears the conversation history to start fresh.
+   *
+   * Call this when starting a new reconnaissance mission
+   * so previous context doesn't interfere.
+   */
   reset(): void {
     this.conversationHistory = [];
   }

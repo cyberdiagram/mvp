@@ -1,22 +1,53 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+/**
+ * Represents a loaded skill document.
+ *
+ * Skills are markdown files that contain domain knowledge and tool usage
+ * guidance for specific security tools (e.g., nmap_skill.md).
+ */
 export interface Skill {
+  /** Skill name derived from filename (e.g., "nmap" from "nmap_skill.md") */
   name: string;
+  /** Full markdown content of the skill document */
   content: string;
-  tools: string[];  // Tools mentioned in skill (nmap_host_discovery, etc.)
+  /** Tool names extracted from the skill (e.g., ["nmap_host_discovery", "nmap_port_scan"]) */
+  tools: string[];
 }
 
+/**
+ * SkillsLoader - Dynamic skill management for the pentest agent.
+ *
+ * Skills are markdown documents that provide domain expertise and tool
+ * guidance to the Reasoner. They help the AI make better decisions
+ * about which tools to use and how to interpret results.
+ *
+ * Skills are loaded from *_skill.md files in the skills directory.
+ */
 export class SkillsLoader {
   private skillsDir: string;
   private skills: Map<string, Skill> = new Map();
 
+  /**
+   * Creates a new SkillsLoader.
+   *
+   * @param skillsDir - Path to directory containing *_skill.md files
+   */
   constructor(skillsDir: string = './skills') {
     this.skillsDir = skillsDir;
   }
 
   /**
-   * Load all skills from markdown files
+   * Loads all skill documents from the skills directory.
+   *
+   * Scans for files matching *_skill.md pattern, reads their content,
+   * extracts tool names mentioned within, and stores them for later use.
+   *
+   * @example
+   * // Given skills/nmap_skill.md exists:
+   * await loader.loadSkills();
+   * // Now getSkill('nmap') returns the skill
    */
   async loadSkills(): Promise<void> {
     const files = fs.readdirSync(this.skillsDir);
@@ -42,7 +73,15 @@ export class SkillsLoader {
   }
 
   /**
-   * Extract tool names from skill markdown
+   * Extracts tool names mentioned in a skill document.
+   *
+   * Uses regex patterns to find tool references in the markdown:
+   * - "Command: nmap" → extracts "nmap"
+   * - "Action: nmap_host_discovery" → extracts "nmap_host_discovery"
+   * - "use nmap" → extracts "nmap"
+   *
+   * @param content - The markdown content to parse
+   * @returns Array of unique tool names found
    */
   private extractToolNames(content: string): string[] {
     const tools: string[] = [];
@@ -67,21 +106,36 @@ export class SkillsLoader {
   }
 
   /**
-   * Get skill by name
+   * Retrieves a skill by its name.
+   *
+   * @param name - The skill name (e.g., "nmap" for nmap_skill.md)
+   * @returns The Skill object if found, undefined otherwise
    */
   getSkill(name: string): Skill | undefined {
     return this.skills.get(name);
   }
 
   /**
-   * Get all skills
+   * Returns all loaded skills.
+   *
+   * @returns Array of all Skill objects loaded from disk
    */
   getAllSkills(): Skill[] {
     return Array.from(this.skills.values());
   }
 
   /**
-   * Get relevant skills based on current context
+   * Finds skills relevant to a given context using keyword matching.
+   *
+   * Splits the context into keywords and scores each skill by how many
+   * keywords appear in its content. Returns skills sorted by relevance.
+   *
+   * @param context - The search context (e.g., "scan ports on web server")
+   * @returns Array of matching skills, sorted by relevance (most relevant first)
+   *
+   * @example
+   * const skills = loader.getRelevantSkills('host discovery network');
+   * // Returns skills containing those keywords, nmap_skill likely first
    */
   getRelevantSkills(context: string): Skill[] {
     const relevant: Skill[] = [];
@@ -107,7 +161,17 @@ export class SkillsLoader {
   }
 
   /**
-   * Build context string for LLM with relevant skills
+   * Builds a formatted context string for the LLM with relevant skills.
+   *
+   * Takes the top 3 most relevant skills and formats them into a
+   * markdown document that can be injected into the Reasoner's system prompt.
+   *
+   * @param query - The query to find relevant skills for
+   * @returns Formatted markdown string with skill content, or a message if no skills found
+   *
+   * @example
+   * const context = loader.buildSkillContext('reconnaissance pentest');
+   * reasoner.setSkillContext(context);  // Inject into Reasoner
    */
   buildSkillContext(query: string): string {
     const relevantSkills = this.getRelevantSkills(query);
