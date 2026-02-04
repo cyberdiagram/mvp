@@ -4,57 +4,89 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MVP is an AI-powered penetration testing agent that uses Claude AI with Model Context Protocol (MCP) servers for automated security reconnaissance. The agent reasons about attack strategies, executes security tools (Nmap, etc.), and interprets results to guide penetration testing workflows.
+MVP is an AI-powered penetration testing agent using a hierarchical multi-agent architecture. The system combines Claude AI (Sonnet and Haiku models) with Model Context Protocol (MCP) servers for automated security reconnaissance.
 
 ## Build and Run Commands
 
 ```bash
 npm run build      # Compile TypeScript to dist/
-npm run start      # Run compiled agent (node dist/index.js)
+npm start          # Run compiled agent (node dist/index.js)
 npm run dev        # Build and run in one command
 
 # CLI Usage
 npm start recon <target>    # Run reconnaissance on specific target
-npm start interactive       # Interactive mode for extended testing
+npm start interactive       # Interactive REPL mode
 ```
 
-## Architecture
+## Multi-Agent Architecture
 
-### Core Components
+The system uses four specialized subagents coordinated by an orchestrator:
 
-**Agent System** (`src/agent/`):
-- `reasoner.ts` - LLM reasoning engine that interfaces with Claude API, maintains conversation history, and parses responses into structured actions (tool, arguments, reasoning)
-- `executor.ts` - MCP tool execution layer that routes tool calls (nmap_*, gobuster_*, sqlmap_*) to appropriate MCP clients
-- `skillsLoader.ts` - Dynamic skill management that loads skill definitions from markdown files (`*_skill.md`), matches skills to context via keyword relevance
+```
+ORCHESTRATOR (src/agent/index.ts)
+├── Reasoner (Sonnet) - Strategic brain for attack planning
+├── Executor (Haiku) - Breaks plans into executable tool steps
+├── MCP Agent - Executes security tools via MCP protocol
+└── Data Cleaner (Haiku) - Parses raw output into structured JSON
+```
 
-**Utilities** (`src/utils/`):
-- `parser.ts` - Parses Nmap output into structured Host/Port objects
-- `logger.ts` - Structured file logging with timestamp, level, message, data
-- `rateLimiter.ts` - Token bucket rate limiting
+### Agent Flow
 
-**Configuration**:
-- `src/config.ts` - Model configuration (claude-sonnet-4-20250514, max tokens)
-- `src/index.ts` - Main entry point, initializes PentestAgent
+```
+Target → Reasoner (decides action)
+      → Executor (creates steps)
+      → MCP Agent (runs tools)
+      → DataCleaner (parses output)
+      → back to Reasoner with results
+```
 
-**Skills** (`src/skills/`):
-- Markdown files containing tool-specific decision frameworks and prompts
-- Currently includes `nmap_skill.md` for reconnaissance guidance
+### Key Components
 
-### Data Flow
+**Orchestrator** ([src/agent/index.ts](src/agent/index.ts)):
+- `PentestAgent` class coordinates all subagents
+- Runs main reconnaissance loop (max 15 iterations)
+- Aggregates results and handles agent communication
+- `reconnaissance(target)` - automated recon mode
+- `interactive()` - REPL mode for manual queries
 
-1. Target input → Reasoner consults skill documents → Claude API decides next action
-2. Executor routes tool calls to MCP clients → Tool execution
-3. Results parsed and fed back to reasoner → Adaptive strategy loop
+**Subagent Definitions** ([src/agent/definitions/](src/agent/definitions/)):
+- [reasoner.ts](src/agent/definitions/reasoner.ts) - `ReasonerAgent` (Sonnet) for strategic decisions
+- [executor.ts](src/agent/definitions/executor.ts) - `ExecutorAgent` (Haiku) for workflow sequencing
+- [mcp-agent.ts](src/agent/definitions/mcp-agent.ts) - `MCPAgent` for tool execution via MCP
+- [data-cleaner.ts](src/agent/definitions/data-cleaner.ts) - `DataCleanerAgent` (Haiku) for parsing
+- [types.ts](src/agent/definitions/types.ts) - Shared interfaces (ReasonerOutput, ExecutorPlan, ToolResult, CleanedData, NmapScanResult)
 
-## Dependencies
+**Skills System** ([src/agent/skillsLoader.ts](src/agent/skillsLoader.ts)):
+- Loads skill documents from [src/skills/](src/skills/) markdown files
+- `buildSkillContext(keywords)` matches skills by keyword relevance
+- Skills injected into Reasoner's system prompt for decision-making
 
-- `@anthropic-ai/sdk` - Claude API client
-- `@anthropic-ai/claude-agent-sdk` - Agent framework
-- `@cyber/mcp-nmap-client` - Custom MCP client for Nmap (linked via yalc)
+**Entry Point** ([src/index.ts](src/index.ts)):
+- Loads configuration from environment variables
+- Initializes PentestAgent with MCP server paths
+- Parses CLI arguments and routes to recon/interactive mode
+
+## Data Structures
+
+Key interfaces defined in [src/agent/definitions/types.ts](src/agent/definitions/types.ts):
+
+- `ReasonerOutput` - Strategic decisions from Reasoner (thought, action, tool, arguments, is_complete)
+- `ExecutorPlan` - Execution plan with ordered steps and status tracking
+- `ExecutorStep` - Single atomic tool call (tool name, arguments, description)
+- `ToolResult` - Raw output from MCP tool execution (success, output, error)
+- `CleanedData` - Structured data after DataCleaner parsing (type, data, summary)
+- `NmapScanResult` - Parsed Nmap results (hosts, ports, services, versions)
 
 ## Environment Setup
 
-**MCP Client Dependency**: The `@cyber/mcp-nmap-client` is linked via yalc from a separate repo:
+**Required Environment Variables**:
+- `ANTHROPIC_API_KEY` - Claude API key (required, application exits if missing)
+- `NMAP_SERVER_PATH` - Path to nmap MCP server (optional, defaults to `../pentest-mcp-server/nmap-server-ts/dist/index.js`)
+
+**MCP Client (yalc)**:
+
+The `@cyber/mcp-nmap-client` package is linked locally via yalc:
+
 ```bash
 # In the mcp-nmap-client repo:
 npm run build && yalc publish
@@ -64,10 +96,19 @@ yalc add @cyber/mcp-nmap-client
 npm install
 ```
 
-**Environment Variables**:
-- `NMAP_SERVER_PATH` - Path to nmap MCP server (defaults to `../pentest-mcp-server/nmap-server-ts/dist/index.js`)
-- `ANTHROPIC_API_KEY` - Claude API key (required)
+## TypeScript Configuration
+
+- Target: ES2022, CommonJS modules
+- Strict mode enabled
+- Output: [dist/](dist/) directory
+- Source maps and declarations generated
+- [tsconfig.json](tsconfig.json) - Full TypeScript configuration
 
 ## Code Style
 
-Prettier configured: semicolons, ES5 trailing commas, single quotes, 100 char width, 2-space indent
+Prettier configuration ([.prettierrc](.prettierrc)):
+- Semicolons required
+- Single quotes
+- ES5 trailing commas
+- 100 character line width
+- 2-space indentation (spaces, not tabs)
