@@ -242,10 +242,17 @@ export class DataCleanerAgent {
    * @returns CleanedData parsed by the LLM
    */
   private async llmBasedParsing(rawOutput: string, toolType: string): Promise<CleanedData> {
+    // Use cache_control to cache static system prompt (~90% token savings on repeated calls)
     const response = await this.client.messages.create({
       model: DATA_CLEANER_MODEL,
       max_tokens: DATA_CLEANER_MAX_TOKENS,
-      system: DATA_CLEANER_SYSTEM_PROMPT,
+      system: [
+        {
+          type: 'text',
+          text: DATA_CLEANER_SYSTEM_PROMPT,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [
         {
           role: 'user',

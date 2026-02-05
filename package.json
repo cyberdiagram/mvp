@@ -24,6 +24,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.29",
     "@anthropic-ai/sdk": "^0.72.1",
     "@cyber/mcp-nmap-client": "file:.yalc/@cyber/mcp-nmap-client",
+    "dotenv": "^17.2.3",
     "typescript": "^5.9.3"
   },
   "devDependencies": {

@@ -111,10 +111,17 @@ export class ExecutorAgent {
     }
 
     // Otherwise, ask Executor to break down the action
+    // Use cache_control to cache static system prompt for token optimization
     const response = await this.client.messages.create({
       model: EXECUTOR_MODEL,
       max_tokens: EXECUTOR_MAX_TOKENS,
-      system: EXECUTOR_SYSTEM_PROMPT,
+      system: [
+        {
+          type: 'text',
+          text: EXECUTOR_SYSTEM_PROMPT,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [
         {
           role: 'user',

@@ -124,10 +124,6 @@ export class ReasonerAgent {
    * // Returns: { thought: "SSH is open...", action: "Detect service version", tool: "nmap_service_detection", ... }
    */
   async reason(observation: string, additionalContext?: string): Promise<ReasonerOutput> {
-    const systemPrompt = this.skillContext
-      ? `${REASONER_SYSTEM_PROMPT}\n\n# Loaded Skills\n\n${this.skillContext}`
-      : REASONER_SYSTEM_PROMPT;
-
     const userMessage = additionalContext
       ? `${observation}\n\nAdditional context: ${additionalContext}`
       : observation;
@@ -137,10 +133,29 @@ export class ReasonerAgent {
       content: userMessage,
     });
 
+    // Build system prompt with cache_control for token optimization
+    // Caches static content (base prompt + skills) to reduce token usage by ~85%
+    const systemBlocks: Anthropic.TextBlockParam[] = [
+      {
+        type: 'text',
+        text: REASONER_SYSTEM_PROMPT,
+        cache_control: { type: 'ephemeral' },
+      },
+    ];
+
+    // Add skill context as separate cached block if present
+    if (this.skillContext) {
+      systemBlocks.push({
+        type: 'text',
+        text: `# Loaded Skills\n\n${this.skillContext}`,
+        cache_control: { type: 'ephemeral' },
+      });
+    }
+
     const response = await this.client.messages.create({
       model: REASONER_MODEL,
       max_tokens: REASONER_MAX_TOKENS,
-      system: systemPrompt,
+      system: systemBlocks,
       messages: this.conversationHistory,
     });
 
