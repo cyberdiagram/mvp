@@ -30,13 +30,32 @@ export interface AgentConfig {
  * Reasoner → Executor → MCP → DataCleaner → back to Reasoner with results
  */
 export class PentestAgent {
+  /** Configuration for the agent system */
   private config: AgentConfig;
 
   // Subagents : ReasonerAgent , ExecutorAgent , MCPAgent , DataCleanerAgent
-  private skillsLoader: SkillsLoader;
+  /**
+   * Skills and rules loader - exposed publicly for Memory Manager access.
+   *
+   * The SkillsLoader provides:
+   * - Skill documents loading (*_skill.md)
+   * - Memory Manager (addRule, removeRule, listRules)
+   * - Context building for LLM injection
+   *
+   * @public
+   */
+  public skillsLoader: SkillsLoader;
+
+  /** Strategic reasoning agent (Claude Sonnet) */
   private reasoner: ReasonerAgent;
+
+  /** Execution planning agent (Claude Haiku) */
   private executor: ExecutorAgent;
+
+  /** MCP protocol agent for tool execution */
   private mcpAgent: MCPAgent;
+
+  /** Data cleaning/parsing agent (Claude Haiku) */
   private dataCleaner: DataCleanerAgent;
 
   /**

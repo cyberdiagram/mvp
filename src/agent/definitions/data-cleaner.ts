@@ -13,7 +13,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { CleanedData, NmapScanResult } from './types.js';
 
 /** Model used for data parsing - Haiku for speed and cost efficiency */
-export const DATA_CLEANER_MODEL = 'claude-3-5-haiku-20241022';
+export const DATA_CLEANER_MODEL = 'claude-haiku-4-5-20251001';
 
 /** Max tokens for DataCleaner responses - parsed data can be lengthy */
 export const DATA_CLEANER_MAX_TOKENS = 2000;

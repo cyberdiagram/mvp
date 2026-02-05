@@ -1,0 +1,5 @@
+{
+  "nmap": [
+    "After host discovery confirms host is up, ALL subsequent scans MUST include -Pn to skip redundant ping probes"
+  ]
+}

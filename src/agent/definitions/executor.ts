@@ -10,7 +10,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ExecutorPlan, ExecutorStep, ReasonerOutput } from './types.js';
 
 /** Model used for execution planning - Haiku for speed and efficiency */
-export const EXECUTOR_MODEL = 'claude-3-5-haiku-20241022';
+export const EXECUTOR_MODEL = 'claude-haiku-4-5-20251001';
 
 /** Max tokens for Executor responses - plans are typically shorter */
 export const EXECUTOR_MAX_TOKENS = 1000;
