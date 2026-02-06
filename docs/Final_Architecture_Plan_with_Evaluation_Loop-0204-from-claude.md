@@ -1,7 +1,8 @@
 # Complete AI Penetration Testing Architecture: Intelligence + Evaluation Loop
 
 **Generated:** 2026-02-04
-**Version:** 1.0
+**Updated:** 2026-02-06
+**Version:** 1.1
 **Status:** Implementation Plan
 
 ---
@@ -38,28 +39,29 @@ This document combines three architectural upgrades to transform the MVP pentest
          │             │ NMAP Tools  │                 │
          │             └─────────────┘                 │
          │                                             ▼
-         │              ┌────────────────────────────────────┐
-         │              │   INTELLIGENCE LAYER (Parallel)    │
-         │              ├────────────────┬───────────────────┤
-         │              │   PROFILER     │   RAG AGENT       │
-         │              │   (Haiku)      │   (Haiku+APIs)    │
-         │              │                │                   │
-         │              │ • OS detection │ • NVD API         │
-         │              │ • Tech stack   │ • ExploitDB       │
-         │              │ • Security     │ • CVE scoring     │
-         │              │   posture      │ • PoC mapping     │
-         │              └────────────────┴───────────────────┘
+         │  ┌──────────────────────────────────────────────────────┐
+         │  │          INTELLIGENCE LAYER (Parallel)               │
+         │  ├──────────────┬──────────────────┬────────────────────┤
+         │  │  PROFILER    │  VULN LOOKUP     │  RAG MEMORY        │
+         │  │  (Haiku)     │  (APIs)          │  (ChromaDB MCP)    │
+         │  │              │                  │                    │
+         │  │ • OS detect  │ • NVD API        │ • Anti-patterns    │
+         │  │ • Tech stack │ • ExploitDB      │ • Past failures    │
+         │  │ • Security   │ • CVE scoring    │ • Human lessons    │
+         │  │   posture    │ • PoC mapping    │ • Playbooks        │
+         │  └──────────────┴──────────────────┴────────────────────┘
          │                             │
          │                             ▼
-         │              ┌─────────────────────────────────┐
-         │              │   REASONER (Sonnet)             │
-         │              │                                 │
-         │              │ Input: Profile + CVEs + Services│
-         │              │ Output: TacticalPlanObject      │
-         │              │  ├── attack_vectors[]           │
-         │              │  ├── action (for Executor)      │
-         │              │  └── prediction_metrics         │
-         │              └─────────────────────────────────┘
+         │              ┌──────────────────────────────────────┐
+         │              │   REASONER (Sonnet)                  │
+         │              │                                      │
+         │              │ Input: Profile + CVEs + Services     │
+         │              │      + RAG Memory Warnings           │
+         │              │ Output: TacticalPlanObject           │
+         │              │  ├── attack_vectors[]                │
+         │              │  ├── action (for Executor)           │
+         │              │  └── prediction_metrics              │
+         │              └──────────────────────────────────────┘
          │                             │
          ▼                             ▼
     ┌─────────────────────────────────────────────┐
@@ -69,32 +71,47 @@ This document combines three architectural upgrades to transform the MVP pentest
     │  2. MCP Agent captures raw output           │
     │  3. Evaluator analyzes success/failure      │
     │  4. Orchestrator saves training pair        │
+    │  5. Session logger records step (JSONL)     │
     └─────────────────────────────────────────────┘
                         │
-                        ▼
-              ┌──────────────────┐
-              │  EVALUATOR       │
-              │  (Haiku)         │
-              │                  │
-              │ Compares:        │
-              │ • Predicted      │
-              │ • Actual         │
-              │                  │
-              │ Labels:          │
-              │ • True Positive  │
-              │ • False Positive │
-              │ • False Negative │
-              └──────────────────┘
-                        │
-                        ▼
-              ┌──────────────────┐
-              │ TRAINING DATA    │
-              │ STORAGE          │
-              │                  │
-              │ • PostgreSQL     │
-              │ • JSON files     │
-              │ • Metrics DB     │
-              └──────────────────┘
+           ┌────────────┴────────────┐
+           ▼                         ▼
+  ┌──────────────────┐     ┌──────────────────────┐
+  │  EVALUATOR       │     │  SESSION LOGGER      │
+  │  (Haiku)         │     │                      │
+  │                  │     │  Logs each step to   │
+  │ Compares:        │     │  JSONL for ETL       │
+  │ • Predicted      │     │  processing          │
+  │ • Actual         │     │                      │
+  │                  │     │  logs/sessions/       │
+  │ Labels:          │     │  ├── session_01.jsonl │
+  │ • True Positive  │     │  └── session_02.jsonl │
+  │ • False Positive │     └──────────┬───────────┘
+  │ • False Negative │                │
+  └──────────────────┘                ▼
+           │               ┌──────────────────────┐
+           ▼               │  ETL PIPELINE        │
+  ┌──────────────────┐     │  (pentest-rag-memory)│
+  │ TRAINING DATA    │     │                      │
+  │ STORAGE          │     │  Extract → Transform │
+  │                  │     │  (DeepSeek) → Load   │
+  │ • JSON files     │     │  (ChromaDB)          │
+  │ • Metrics DB     │     └──────────┬───────────┘
+  └──────────────────┘                │
+                                      ▼
+                           ┌──────────────────────┐
+                           │  ChromaDB            │
+                           │  (Vector Store)      │
+                           │                      │
+                           │  • anti_patterns     │
+                           │  • playbooks         │
+                           │  • tool_preferences  │
+                           └──────────────────────┘
+                                      │
+                           Feeds back via RAG MCP Server
+                                      │
+                                      ▼
+                           (back to Intelligence Layer)
 ```
 
 ---
@@ -496,16 +513,23 @@ Be concise and evidence-based. If uncertain, state "Unknown" rather than guessin
 
 ---
 
-### Phase 4: RAG Agent with External APIs
+### Phase 4: Intelligence Layer — VulnLookup Agent + RAG Memory System
 
-**Goal:** Real-time CVE lookup from NVD and ExploitDB
+The Intelligence Layer consists of three parallel subsystems that enrich the Reasoner's context before each decision. The **Profiler** (Phase 3) handles target profiling. This phase covers the remaining two:
+
+- **Phase 4a: VulnLookupAgent** — Real-time CVE lookup from NVD and ExploitDB
+- **Phase 4b: RAG Memory System** — Long-term anti-pattern memory via ChromaDB (separate repo: `pentest-rag-memory`)
+
+#### Phase 4a: VulnLookup Agent (Real-Time CVE Lookup)
+
+**Goal:** Real-time vulnerability research using external APIs
 
 **Dependencies:**
 ```bash
 npm install axios node-cache
 ```
 
-**New file: `src/agent/definitions/rag-agent.ts`**
+**New file: `src/agent/definitions/vuln-lookup.ts`**
 
 ```typescript
 import axios from 'axios'
@@ -513,7 +537,7 @@ import NodeCache from 'node-cache'
 import { DiscoveredService, TargetProfile, VulnerabilityInfo } from './types.js'
 
 /**
- * RAGAgent performs real-time vulnerability research using external APIs.
+ * VulnLookupAgent performs real-time vulnerability research using external APIs.
  *
  * Data Sources:
  * - NVD (National Vulnerability Database) - CVE data with CVSS scores
@@ -523,8 +547,11 @@ import { DiscoveredService, TargetProfile, VulnerabilityInfo } from './types.js'
  * - Caching to avoid rate limits (1-hour TTL)
  * - OS-aware filtering (skip Windows CVEs for Linux targets)
  * - Severity-based prioritization
+ *
+ * Note: This is NOT the RAG memory system. This agent performs live API lookups.
+ * For learned anti-patterns from past sessions, see the RAG Memory System (Phase 4b).
  */
-export class RAGAgent {
+export class VulnLookupAgent {
   private cache: NodeCache
   private nvdApiKey?: string
 
@@ -550,7 +577,7 @@ export class RAGAgent {
     for (const service of services) {
       // Skip if no version info (can't search CVEs without version)
       if (!service.product || !service.version) {
-        console.debug(`[RAG] Skipping ${service.service} - no version info`)
+        console.debug(`[VulnLookup] Skipping ${service.service} - no version info`)
         continue
       }
 
@@ -558,12 +585,12 @@ export class RAGAgent {
       const cacheKey = `${service.product}:${service.version}`
       const cached = this.cache.get<VulnerabilityInfo[]>(cacheKey)
       if (cached) {
-        console.debug(`[RAG] Cache hit for ${cacheKey}`)
+        console.debug(`[VulnLookup] Cache hit for ${cacheKey}`)
         allVulnerabilities.push(...cached)
         continue
       }
 
-      console.debug(`[RAG] Querying NVD for ${cacheKey}`)
+      console.debug(`[VulnLookup] Querying NVD for ${cacheKey}`)
 
       // Query NVD API
       const cves = await this.queryNVD(service.product, service.version)
@@ -636,12 +663,12 @@ export class RAGAgent {
         })
       }
 
-      console.debug(`[RAG] NVD returned ${vulnerabilities.length} CVEs for ${product} ${version}`)
+      console.debug(`[VulnLookup] NVD returned ${vulnerabilities.length} CVEs for ${product} ${version}`)
       return vulnerabilities
 
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
-      console.error(`[RAG] NVD API error: ${message}`)
+      console.error(`[VulnLookup] NVD API error: ${message}`)
       return []
     }
   }
@@ -670,12 +697,12 @@ export class RAGAgent {
         if (hasExploit) {
           cve.poc_available = true
           cve.poc_url = `https://www.exploit-db.com/exploits/?cve=${cve.cve_id}`
-          console.debug(`[RAG] Found PoC for ${cve.cve_id}`)
+          console.debug(`[VulnLookup] Found PoC for ${cve.cve_id}`)
         }
 
       } catch (error: unknown) {
         // Non-critical, continue without PoC info
-        console.debug(`[RAG] ExploitDB lookup failed for ${cve.cve_id}`)
+        console.debug(`[VulnLookup] ExploitDB lookup failed for ${cve.cve_id}`)
       }
     }
 
@@ -725,6 +752,245 @@ export class RAGAgent {
   }
 }
 ```
+
+---
+
+#### Phase 4b: RAG Memory System (Long-Term Anti-Pattern Learning)
+
+**Goal:** Enable the agent to learn from past failures and human interventions, preventing repeated mistakes across sessions
+
+**Separate Repository:** `pentest-rag-memory` (already created, Phase 1 foundation complete)
+
+**Key Difference from VulnLookup:**
+| Aspect | VulnLookupAgent (Phase 4a) | RAG Memory System (Phase 4b) |
+|--------|---------------------------|------------------------------|
+| **Data Source** | External APIs (NVD, ExploitDB) | Internal experience (past sessions) |
+| **Knowledge Type** | Known CVEs for specific versions | Anti-patterns, playbooks, tool preferences |
+| **When Queried** | After service discovery | Before every Reasoner decision |
+| **Storage** | In-memory cache (1hr TTL) | ChromaDB vector store (persistent) |
+| **Learning** | No learning (static lookups) | Continuously learns from failures |
+
+**Architecture:**
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                  RAG LONG-TERM FEEDBACK SYSTEM                        │
+│                  (pentest-rag-memory repository)                      │
+├───────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐    │
+│  │  Data         │    │  ETL         │    │  Vector Database     │    │
+│  │  Collection   │───▶│  Pipeline    │───▶│  (ChromaDB)          │    │
+│  │  (JSONL Logs) │    │  (DeepSeek)  │    │                      │    │
+│  └──────────────┘    └──────────────┘    └──────────────────────┘    │
+│                                                   │                   │
+│                                                   ▼                   │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐    │
+│  │  Pentest     │◀───│  Dynamic     │◀───│  RAG MCP Server      │    │
+│  │  Agent       │    │  Prompting   │    │  (rag_recall tool)   │    │
+│  └──────────────┘    └──────────────┘    └──────────────────────┘    │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+**Core Concept — Anti-Pattern Injection:**
+
+The RAG system injects learned warnings into the Reasoner's system prompt before each decision. For example, if the agent previously got locked out by brute-forcing SSH, the system recalls:
+
+```
+[MEMORY RECALL - WARNINGS FROM PAST EXPERIENCE]
+
+[ANTI-PATTERN WARNING]
+Scenario: SSH, port 22, remote access, secure shell
+⛔ AVOID: Immediately brute-forcing SSH with common wordlists
+⚠️ RISK: Fail2ban will block your IP after 3-5 attempts
+✅ SUGGESTION: Check for SSH key authentication, look for exposed private keys, enumerate users first
+
+[END MEMORY RECALL]
+```
+
+**Implementation Status & Components:**
+
+| Component | Location | Status |
+|-----------|----------|--------|
+| Type definitions | `pentest-rag-memory/src/types/index.ts` | ✅ Complete |
+| ChromaDB client wrapper | `pentest-rag-memory/src/db/chromaClient.ts` | ✅ Complete |
+| Collection schemas | `pentest-rag-memory/src/db/collections.ts` | ✅ Complete |
+| Seed anti-patterns (7) | `pentest-rag-memory/scripts/seed-db.ts` | ✅ Complete |
+| Case Extractor (ETL) | `pentest-rag-memory/src/etl/extractor.ts` | ⏳ Phase 2 |
+| Pattern Transformer | `pentest-rag-memory/src/etl/transformer.ts` | ⏳ Phase 2 |
+| Pattern Loader | `pentest-rag-memory/src/etl/loader.ts` | ⏳ Phase 2 |
+| RAG MCP Server | `pentest-rag-memory/src/server/index.ts` | ⏳ Phase 3 |
+| PDF report ETL | `pentest-rag-memory/src/etl/pdf-extractor.ts` | ⏳ Phase 2 |
+
+**ChromaDB Collections:**
+
+```typescript
+// Three vector collections for different knowledge types
+
+// 1. anti_patterns — Learned failures (primary collection)
+//    "When encountering X, do NOT do Y because Z happens"
+{
+  name: 'anti_patterns',
+  metadata: { hnsw_space: 'cosine' },
+  fields: {
+    id: 'string',           // e.g., "ap_htb_legacy_01_step5"
+    document: 'string',     // embedding_text (for vector search)
+    metadata: {
+      type: 'anti_pattern',
+      trigger_keywords: 'string',  // comma-separated
+      source_case_id: 'string',
+      created_at: 'string',
+      full_prompt_text: 'string',  // actual text injected into Reasoner
+    },
+  },
+}
+
+// 2. playbooks — Successful attack strategies
+//    "When encountering X, this approach worked"
+{
+  name: 'playbooks',
+  metadata: { hnsw_space: 'cosine' },
+  fields: {
+    id: 'string',
+    document: 'string',
+    metadata: {
+      type: 'playbook',
+      service: 'string',       // "apache", "ssh", "smb"
+      cve: 'string',           // optional CVE reference
+      success_rate: 'number',
+      full_prompt_text: 'string',
+    },
+  },
+}
+
+// 3. tool_preferences — Learned tool configurations
+//    "For service X, use flags Y because Z"
+{
+  name: 'tool_preferences',
+  metadata: { hnsw_space: 'cosine' },
+  fields: {
+    id: 'string',
+    document: 'string',
+    metadata: {
+      tool_name: 'string',    // "nmap", "hydra", "gobuster"
+      preference: 'string',
+      reason: 'string',
+    },
+  },
+}
+```
+
+**Pre-Seeded Anti-Patterns (7 patterns, ready on initialization):**
+
+1. **Login brute-force** — Check logic flaws, default creds, IDOR before dictionary attacks
+2. **Noisy initial scans** — Start with quiet host discovery, expand based on findings
+3. **SSH brute-force** — Fail2ban blocks after 3-5 attempts; enumerate keys first
+4. **SQL injection noise** — Confirm manually before sqlmap; use low aggression levels
+5. **SMB null session** — Always try guest access before credential attacks
+6. **Web directory overload** — Use small wordlists first, check robots.txt/sitemap
+7. **Privilege escalation rush** — Manual enum before automated LinPEAS/WinPEAS
+
+**RAG MCP Server Interface (Phase 3 of pentest-rag-memory):**
+
+The MCP server exposes two tools that the main agent calls:
+
+```typescript
+// Tool 1: rag_recall — Query memories before making decisions
+{
+  name: 'rag_recall',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      observation: { type: 'string', description: 'Current scenario description' },
+      thought: { type: 'string', description: 'Current reasoning (optional)' },
+      top_k: { type: 'number', description: 'Number of memories to recall (default: 3)' },
+    },
+    required: ['observation'],
+  },
+}
+
+// Tool 2: rag_learn — Manually teach new patterns (human-in-the-loop)
+{
+  name: 'rag_learn',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      scenario: { type: 'string', description: 'Trigger scenario' },
+      anti_pattern: { type: 'string', description: 'What NOT to do' },
+      consequence: { type: 'string', description: 'What bad outcome this causes' },
+      suggestion: { type: 'string', description: 'What to do instead' },
+    },
+    required: ['scenario', 'anti_pattern', 'consequence', 'suggestion'],
+  },
+}
+```
+
+**ETL Pipeline (Phase 2 of pentest-rag-memory):**
+
+The ETL pipeline processes session logs and PDF reports into generalized patterns:
+
+```
+Session JSONL logs ──┐
+                     ├──▶ Extractor ──▶ Transformer (DeepSeek) ──▶ Loader ──▶ ChromaDB
+PDF/MD reports ──────┘
+
+Extraction criteria:
+  1. outcome_label === 'failed'
+  2. human_intervention field exists
+  3. Consecutive failures (pattern of struggle)
+
+Transformation (DeepSeek de-specification):
+  - Replace specific IPs → {{TARGET}}, {{PORT}}
+  - Identify root cause (WHY it was wrong)
+  - Generate corrective strategy
+  - Produce embedding_text for vector search
+```
+
+**Integration with Main Agent (see Phase 7 updates):**
+
+```typescript
+// MCP server config in main agent
+const config = {
+  mcpServers: {
+    nmap: { path: '../pentest-mcp-server/nmap-server-ts/dist/index.js' },
+    rag_memory: { path: '../pentest-rag-memory/dist/server/index.js' },
+  },
+}
+
+// In Reasoner.reason() — query RAG before each decision
+async reason(observation: string): Promise<ReasonerOutput> {
+  // Query RAG memory for relevant anti-patterns
+  const memoryRecall = await this.ragClient.recall(observation)
+
+  // Inject memories into skill context
+  const enhancedContext = this.skillContext + memoryRecall.assembled_prompt
+
+  // Continue with normal reasoning using enriched context...
+}
+```
+
+**Session Logging (required for ETL data collection):**
+
+```typescript
+// Add to PentestAgent class for JSONL session logging
+interface SessionStep {
+  session_id: string
+  step_index: number
+  timestamp: string
+  role: 'agent' | 'human' | 'mixed'
+  observation: { last_tool_output: string; open_ports?: number[]; target_info?: object }
+  thought_process: { analysis: string; reasoning: string; plan: string }
+  action: { tool_name: string; tool_args: Record<string, unknown> }
+  result: string
+  outcome_label: 'success' | 'failed' | 'partial'
+  human_intervention?: { type: 'stop' | 'correct' | 'guide'; message: string }
+}
+
+// Log location: mvp/logs/sessions/<session_id>.jsonl
+```
+
+> **Full implementation details:** See `pentest-rag-memory/docs/RAG-Implementation-Plan.md` for the complete specification including ETL pipeline code, MCP server implementation, PDF report processing, and ChromaDB schema definitions.
 
 ---
 
@@ -1040,7 +1306,7 @@ Evaluate this result.`
 
 ```typescript
 import { ProfilerAgent } from './definitions/profiler.js'
-import { RAGAgent } from './definitions/rag-agent.js'
+import { VulnLookupAgent } from './definitions/vuln-lookup.js'
 import { EvaluatorAgent } from './definitions/evaluator.js'
 import {
   IntelligenceContext,
@@ -1056,9 +1322,12 @@ export interface AgentConfig {
   skillsDir: string
   mcpServers: {
     nmap: { path: string }
+    rag_memory?: { path: string }  // NEW: RAG Memory MCP server
   }
   enableEvaluation?: boolean  // NEW: Enable evaluation loop
+  enableRAGMemory?: boolean   // NEW: Enable RAG memory recall
   trainingDataPath?: string   // NEW: Path to save training data
+  sessionLogsPath?: string    // NEW: Path for JSONL session logs
 }
 
 export class PentestAgent {
@@ -1068,12 +1337,13 @@ export class PentestAgent {
   private executor: ExecutorAgent
   private mcpAgent: MCPAgent
   private dataCleaner: DataCleanerAgent
-  private profiler: ProfilerAgent       // NEW
-  private ragAgent: RAGAgent            // NEW
-  private evaluator: EvaluatorAgent     // NEW
+  private profiler: ProfilerAgent           // NEW
+  private vulnLookup: VulnLookupAgent       // NEW (renamed from RAGAgent)
+  private evaluator: EvaluatorAgent         // NEW
 
-  private sessionId: string             // NEW: For tracking
+  private sessionId: string                 // NEW: For tracking
   private trainingPairs: TrainingPair[] = []  // NEW: Collect training data
+  private stepIndex: number = 0             // NEW: For session logging
 
   constructor(config: AgentConfig) {
     this.config = config
@@ -1083,7 +1353,7 @@ export class PentestAgent {
     this.mcpAgent = new MCPAgent()
     this.dataCleaner = new DataCleanerAgent(config.anthropicApiKey)
     this.profiler = new ProfilerAgent(config.anthropicApiKey)
-    this.ragAgent = new RAGAgent(config.nvdApiKey)
+    this.vulnLookup = new VulnLookupAgent(config.nvdApiKey)
     this.evaluator = new EvaluatorAgent(config.anthropicApiKey)
 
     // Generate session ID
@@ -1108,6 +1378,24 @@ export class PentestAgent {
     while (iteration < maxIterations) {
       iteration++
       console.log(`\n[Orchestrator] === Iteration ${iteration} ===`)
+
+      // ===== STEP 0: RAG MEMORY RECALL (before reasoning) =====
+      if (this.config.enableRAGMemory) {
+        console.log('\n[RAG Memory] Querying past experience...')
+        try {
+          const memoryRecall = await this.mcpAgent.executeTool({
+            tool: 'rag_recall',
+            arguments: { observation, top_k: 3 },
+            description: 'Recall anti-patterns from past sessions'
+          })
+          if (memoryRecall.success && memoryRecall.output) {
+            console.log('[RAG Memory] ✓ Injecting warnings into Reasoner context')
+            this.reasoner.injectMemoryContext(memoryRecall.output)
+          }
+        } catch (err) {
+          console.log('[RAG Memory] ⚠ Failed (continuing without memory):', err)
+        }
+      }
 
       // ===== STEP 1: REASONER - Strategic planning =====
       console.log('\n[Reasoner] Analyzing situation...')
@@ -1166,9 +1454,9 @@ export class PentestAgent {
                   console.log('[Profiler] ⚠ Failed (continuing without profile):', err.message)
                   return null
                 }),
-              this.ragAgent.findVulnerabilities(allDiscoveredServices)
+              this.vulnLookup.findVulnerabilities(allDiscoveredServices)
                 .catch(err => {
-                  console.log('[RAG Agent] ⚠ Failed (continuing without CVE data):', err.message)
+                  console.log('[VulnLookup] ⚠ Failed (continuing without CVE data):', err.message)
                   return []
                 })
             ])
@@ -1178,7 +1466,7 @@ export class PentestAgent {
             }
 
             if (vulnerabilities.length > 0) {
-              console.log(`[RAG Agent] ✓ Found ${vulnerabilities.length} vulnerabilities`)
+              console.log(`[VulnLookup] ✓ Found ${vulnerabilities.length} vulnerabilities`)
               vulnerabilities.slice(0, 3).forEach(v => {
                 console.log(`  - ${v.cve_id} (${v.severity})`)
               })
@@ -1211,6 +1499,16 @@ export class PentestAgent {
         await this.runEvaluationLoop(
           reasoning.tactical_plan,
           currentIntelligence,
+          aggregatedResults[aggregatedResults.length - 1],
+          iteration
+        )
+      }
+
+      // ===== STEP 5b: SESSION LOGGING (for RAG ETL pipeline) =====
+      if (this.config.sessionLogsPath) {
+        await this.logSessionStep(
+          observation,
+          reasoning,
           aggregatedResults[aggregatedResults.length - 1],
           iteration
         )
@@ -1319,6 +1617,50 @@ Summary: ${lastResult.summary}`
     console.log(`[Orchestrator] Training data saved: ${filename}`)
   }
 
+  /**
+   * Log a session step to JSONL for the RAG ETL pipeline.
+   *
+   * These logs are consumed by pentest-rag-memory's ETL pipeline
+   * to extract failures and human interventions, transform them
+   * into generalized anti-patterns via DeepSeek, and load them
+   * into ChromaDB for future recall.
+   */
+  private async logSessionStep(
+    observation: string,
+    reasoning: ReasonerOutput,
+    result: CleanedData | undefined,
+    iteration: number
+  ): Promise<void> {
+    const fs = await import('fs/promises')
+    const logsDir = this.config.sessionLogsPath || './logs/sessions'
+
+    await fs.mkdir(logsDir, { recursive: true })
+
+    const logEntry = {
+      session_id: this.sessionId,
+      step_index: this.stepIndex++,
+      timestamp: new Date().toISOString(),
+      role: 'agent' as const,
+      observation: {
+        last_tool_output: observation,
+      },
+      thought_process: {
+        analysis: reasoning.thought,
+        reasoning: reasoning.action,
+        plan: reasoning.tool || 'continue_analysis',
+      },
+      action: {
+        tool_name: reasoning.tool || 'none',
+        tool_args: reasoning.arguments || {},
+      },
+      result: result?.summary || 'No result',
+      outcome_label: result ? 'success' : 'failed',
+    }
+
+    const logFile = `${logsDir}/${this.sessionId}.jsonl`
+    await fs.appendFile(logFile, JSON.stringify(logEntry) + '\n', 'utf-8')
+  }
+
   // ... rest of existing methods ...
 }
 ```
@@ -1340,8 +1682,12 @@ async function main() {
     process.exit(1)
   }
 
-  // NEW: Optional NVD API key
+  // NEW: Optional API keys
   const nvdApiKey = process.env.NVD_API_KEY
+
+  // NEW: RAG Memory MCP server path
+  const ragMemoryPath = process.env.RAG_MEMORY_SERVER_PATH ||
+    path.resolve('../pentest-rag-memory/dist/server/index.js')
 
   // Configuration
   const config = {
@@ -1349,10 +1695,13 @@ async function main() {
     nvdApiKey,                                    // NEW
     skillsDir: path.resolve('./src/skills'),
     mcpServers: {
-      nmap: { path: nmapPath }
+      nmap: { path: nmapPath },
+      rag_memory: { path: ragMemoryPath },        // NEW: RAG Memory MCP
     },
     enableEvaluation: true,                      // NEW
-    trainingDataPath: './training_data'          // NEW
+    enableRAGMemory: true,                       // NEW: Enable RAG memory recall
+    trainingDataPath: './training_data',         // NEW
+    sessionLogsPath: './logs/sessions',          // NEW: JSONL logs for ETL
   }
 
   const agent = new PentestAgent(config)
@@ -1377,13 +1726,18 @@ export NVD_API_KEY="your-nvd-api-key"  # Get from https://nvd.nist.gov/developer
 
 # Optional
 export NMAP_SERVER_PATH="/path/to/nmap-server-ts/dist/index.js"
+export RAG_MEMORY_SERVER_PATH="/path/to/pentest-rag-memory/dist/server/index.js"
+
+# Required by pentest-rag-memory (for ETL pipeline)
+export DEEPSEEK_API_KEY="sk-xxx"       # For ETL transformation via DeepSeek
+export CHROMADB_PATH="./data/chromadb"  # Vector database location
 ```
 
 ---
 
 ## Dependencies Update
 
-**package.json:**
+**Main agent package.json:**
 
 ```json
 {
@@ -1398,9 +1752,30 @@ export NMAP_SERVER_PATH="/path/to/nmap-server-ts/dist/index.js"
 }
 ```
 
+**pentest-rag-memory package.json (separate repo):**
+
+```json
+{
+  "dependencies": {
+    "chromadb": "^1.7.0",
+    "openai": "^4.20.0",
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0"
+  }
+}
+```
+
 Install:
 ```bash
+# Main agent
 npm install
+
+# RAG memory system (separate repo)
+cd ../pentest-rag-memory && npm install
 ```
 
 ---
@@ -1408,27 +1783,61 @@ npm install
 ## File Structure Summary
 
 ```
-src/
-├── agent/
-│   ├── index.ts                          # MODIFIED: Orchestrator with evaluation loop
-│   ├── skillsLoader.ts                   # No changes
-│   └── definitions/
-│       ├── index.ts                      # MODIFIED: Export new agents
-│       ├── types.ts                      # MODIFIED: Add all new interfaces
-│       ├── reasoner.ts                   # MODIFIED: Tactical planning output
-│       ├── executor.ts                   # No changes
-│       ├── mcp-agent.ts                  # No changes
-│       ├── data-cleaner.ts               # MODIFIED: discoveredServices schema
-│       ├── profiler.ts                   # NEW: Target profiling
-│       ├── rag-agent.ts                  # NEW: CVE/vulnerability lookup
-│       └── evaluator.ts                  # NEW: Outcome evaluation
-├── index.ts                              # MODIFIED: Add NVD_API_KEY, evaluation config
-└── skills/
-    └── nmap_skill.md                     # No changes
+mvp/ (main agent repository)
+├── src/
+│   ├── agent/
+│   │   ├── index.ts                          # MODIFIED: Orchestrator with eval loop + RAG recall + session logging
+│   │   ├── skillsLoader.ts                   # No changes
+│   │   └── definitions/
+│   │       ├── index.ts                      # MODIFIED: Export new agents
+│   │       ├── types.ts                      # MODIFIED: Add all new interfaces
+│   │       ├── reasoner.ts                   # MODIFIED: Tactical planning + memory injection
+│   │       ├── executor.ts                   # No changes
+│   │       ├── mcp-agent.ts                  # No changes
+│   │       ├── data-cleaner.ts               # MODIFIED: discoveredServices schema
+│   │       ├── profiler.ts                   # NEW: Target profiling
+│   │       ├── vuln-lookup.ts                # NEW: CVE/vulnerability lookup (NVD + ExploitDB)
+│   │       └── evaluator.ts                  # NEW: Outcome evaluation
+│   ├── index.ts                              # MODIFIED: Add NVD_API_KEY, RAG config, session logging
+│   └── skills/
+│       └── nmap_skill.md                     # No changes
+├── training_data/                            # NEW: Training pairs storage
+│   ├── session_1738012345_abc123.json
+│   └── session_1738023456_def456.json
+└── logs/                                     # NEW: Session logs for RAG ETL
+    └── sessions/
+        ├── session_1738012345_abc123.jsonl
+        └── session_1738023456_def456.jsonl
 
-training_data/                            # NEW: Training pairs storage
-├── session_1738012345_abc123.json
-└── session_1738023456_def456.json
+pentest-rag-memory/ (separate repository — RAG memory system)
+├── src/
+│   ├── types/index.ts                        # ✅ COMPLETE: Full type system
+│   ├── db/
+│   │   ├── chromaClient.ts                   # ✅ COMPLETE: ChromaDB wrapper
+│   │   ├── collections.ts                    # ✅ COMPLETE: Schemas + seed data
+│   │   └── index.ts                          # ✅ COMPLETE: DB exports
+│   ├── etl/
+│   │   ├── extractor.ts                      # ⏳ PLANNED: Extract failures from JSONL
+│   │   ├── transformer.ts                    # ⏳ PLANNED: DeepSeek de-specification
+│   │   ├── loader.ts                         # ⏳ PLANNED: Load into ChromaDB
+│   │   ├── pdf-extractor.ts                  # ⏳ PLANNED: Extract from PDF reports
+│   │   └── index.ts                          # ⏳ PLANNED: ETL orchestrator
+│   ├── server/
+│   │   ├── index.ts                          # ⏳ PLANNED: MCP server (rag_recall + rag_learn)
+│   │   ├── handlers/
+│   │   │   ├── query.ts                      # ⏳ PLANNED: RAG query handler
+│   │   │   └── ingest.ts                     # ⏳ PLANNED: Manual ingestion
+│   │   └── prompts/
+│   │       └── injection.ts                  # ⏳ PLANNED: Prompt assembly templates
+│   └── index.ts                              # ✅ COMPLETE: Package exports
+├── scripts/
+│   ├── seed-db.ts                            # ✅ COMPLETE: Seed 7 initial anti-patterns
+│   └── run-etl.ts                            # ⏳ PLANNED: Manual ETL trigger
+├── data/
+│   ├── chromadb/                             # Persistent vector storage
+│   └── raw_logs/                             # Imported JSONL files
+└── pdf/
+    └── Sense.md                              # Example pentest report for PDF ETL
 ```
 
 ---
@@ -1447,7 +1856,7 @@ training_data/                            # NEW: Training pairs storage
    - Telnet + FTP + old SMB → "weak" posture
    ```
 
-2. **RAG Agent:**
+2. **VulnLookup Agent:**
    ```bash
    # Test NVD API integration
    - Apache 2.4.49 → finds CVE-2021-41773
@@ -1456,7 +1865,19 @@ training_data/                            # NEW: Training pairs storage
    - OS filtering (Linux CVEs only for Linux target)
    ```
 
-3. **Evaluator Agent:**
+3. **RAG Memory System:**
+   ```bash
+   # Test ChromaDB + MCP integration
+   - Seed database with 7 anti-patterns
+   - Query "SSH port 22 found" → returns SSH brute-force warning
+   - Query "login page" → returns brute-force anti-pattern
+   - Relevance threshold filtering (cosine distance < 0.5)
+   - Assembled prompt format correct for Reasoner injection
+   - rag_recall MCP tool returns formatted warnings
+   - rag_learn MCP tool adds new patterns successfully
+   ```
+
+4. **Evaluator Agent:**
    ```bash
    # Test labeling accuracy
    - Predicted success + actual success → true_positive
@@ -1477,16 +1898,22 @@ npm start recon scanme.nmap.org
 **Expected output:**
 ```
 [Orchestrator] Session ID: session_1738012345_abc123
+[RAG Memory] Querying past experience...
+[RAG Memory] ✓ Injecting warnings into Reasoner context
+[Reasoner] Analyzing situation...
 [Data Cleaner] ✓ Type: nmap_scan
 [Intelligence Layer] Starting parallel analysis...
 [Profiler] ✓ Profile: Linux - hardened
-[RAG Agent] ✓ Found 2 vulnerabilities
+[VulnLookup] ✓ Found 2 vulnerabilities
   - CVE-2021-XXXX (high)
+[RAG Memory] Querying past experience...
+[RAG Memory] ✓ Injecting warnings into Reasoner context
 [Reasoner] Generating tactical plan...
 [Executor] Executing attack vectors...
 [Evaluation Loop] Analyzing attack outcomes...
 [Evaluator] vec_01: true_positive (confidence: 0.92)
 [Orchestrator] Training data saved: ./training_data/session_1738012345_abc123.json
+[Orchestrator] Session log saved: ./logs/sessions/session_1738012345_abc123.jsonl
 ```
 
 ### End-to-End Scenarios
@@ -1494,18 +1921,29 @@ npm start recon scanme.nmap.org
 **Scenario 1: Modern Hardened Target**
 - Target: Ubuntu 22.04, only SSH + HTTPS
 - Expected:
+  - RAG Memory → recalls "noisy scan" + "SSH brute-force" anti-patterns
   - Profiler → "hardened", "low" risk
-  - RAG → minimal CVEs (modern versions)
-  - Reasoner → stealth tactics, low confidence scores
+  - VulnLookup → minimal CVEs (modern versions)
+  - Reasoner → stealth tactics, avoids brute-force (guided by memory warnings)
   - Evaluator → mostly true_negatives (attacks fail as expected)
+  - Session log → captures steps for future ETL
 
 **Scenario 2: Legacy Vulnerable Target**
 - Target: Windows Server 2008, SMB + RDP + Telnet
 - Expected:
+  - RAG Memory → recalls "SMB null session" anti-pattern, suggests guest access first
   - Profiler → "weak", "high-value" risk
-  - RAG → multiple critical CVEs (MS17-010, etc.)
-  - Reasoner → aggressive tactics, high confidence
+  - VulnLookup → multiple critical CVEs (MS17-010, etc.)
+  - Reasoner → aggressive tactics, but follows memory suggestions for SMB
   - Evaluator → true_positives (attacks succeed)
+  - Session log → captures steps for future ETL
+
+**Scenario 3: Repeated Session (Memory Learning)**
+- Target: Same as previous failed session
+- Expected:
+  - RAG Memory → recalls specific anti-patterns from previous failed session
+  - Reasoner → avoids previously failed approaches
+  - Different attack strategy chosen based on past experience
 
 ---
 
@@ -1540,12 +1978,13 @@ for pair in pairs:
 
 | Metric | Before Upgrade | After Upgrade |
 |--------|---------------|---------------|
-| Agents | 4 (Reasoner, Executor, MCP, Cleaner) | 7 (+Profiler, RAG, Evaluator) |
-| Intelligence | None | Profile + CVEs |
+| Agents | 4 (Reasoner, Executor, MCP, Cleaner) | 7 (+Profiler, VulnLookup, Evaluator) + RAG MCP |
+| Intelligence | None | Profile + CVEs + Anti-Pattern Memory |
 | Attack Planning | Generic tool calls | Tactical plan with predictions |
-| Learning Loop | None | Automated evaluation + training data |
-| Latency per iteration | ~2-3s | ~5-7s (parallel intelligence) |
-| Training data | None | JSON pairs for RLHF |
+| Learning Loop | None | Evaluation + training data + RAG feedback |
+| Memory | None (stateless) | ChromaDB vector store (persistent cross-session) |
+| Latency per iteration | ~2-3s | ~5-8s (parallel intelligence + RAG recall) |
+| Training data | None | JSON pairs for RLHF + JSONL session logs |
 
 ---
 
@@ -1559,11 +1998,16 @@ for pair in pairs:
 | Executor | Haiku 3.5 | 10 | 1000 | ~$0.02 |
 | Data Cleaner | Haiku 3.5 | 10 | 1500 | ~$0.03 |
 | Profiler | Haiku 3.5 | 2-3 | 1500 | ~$0.01 |
-| RAG Agent | N/A (API) | 5-10 | N/A | Free |
+| VulnLookup | N/A (API) | 5-10 | N/A | Free |
+| RAG Memory MCP | N/A (local) | 10 | N/A | Free |
 | Evaluator | Haiku 3.5 | 5-10 | 1000 | ~$0.02 |
-| **Total** | | | | **~$0.53** |
+| **Total (runtime)** | | | | **~$0.53** |
 
-NVD API: Free (with rate limits)
+| ETL Component | Model | Cost per run |
+|---------------|-------|-------------|
+| DeepSeek Transformer | DeepSeek-V3 | ~$0.01-0.05 per session |
+| ChromaDB (local) | N/A | Free |
+| NVD API | N/A | Free (with rate limits) |
 
 ---
 
@@ -1571,10 +2015,12 @@ NVD API: Free (with rate limits)
 
 1. **PostgreSQL Storage**: Replace JSON files with proper database for training data
 2. **RLHF Pipeline**: Use training pairs to fine-tune a custom Reasoner model
-3. **Vector Store for RAG**: Add semantic search over CVE database
+3. **RAG Memory Expansion**: Import knowledge from PDF writeups, CTF solutions, and technical documentation via PDF ETL pipeline
 4. **MITRE ATT&CK Mapping**: Tag attack vectors with ATT&CK techniques
-5. **Human-in-the-Loop**: Allow human corrections to Evaluator labels
-6. **Confidence Calibration**: Automatically adjust Reasoner confidence based on historical accuracy
+5. **Human-in-the-Loop**: Allow human corrections via `rag_learn` tool + Evaluator label overrides
+6. **Confidence Calibration**: Automatically adjust Reasoner confidence based on historical accuracy + RAG memory feedback
+7. **Playbook Collection**: Build positive-pattern library alongside anti-patterns for "what worked" guidance
+8. **Cross-Session Analytics**: Dashboard showing RAG memory growth, pattern hit rates, and learning velocity
 
 ---
 
@@ -1582,20 +2028,25 @@ NVD API: Free (with rate limits)
 
 ✅ **Functional:**
 - Profiler accurately identifies OS and security posture (>80% accuracy)
-- RAG finds relevant CVEs from NVD API
-- Reasoner outputs tactical plans with prediction metrics
+- VulnLookup finds relevant CVEs from NVD API
+- RAG Memory recalls relevant anti-patterns for current scenario (cosine distance < 0.5)
+- Reasoner outputs tactical plans with prediction metrics, informed by memory warnings
 - Evaluator correctly labels outcomes (>85% agreement with human review)
 - Training data saved in structured format
+- Session logs written in JSONL format for ETL consumption
 
 ✅ **Performance:**
 - Intelligence layer adds <5s latency per iteration
-- Parallel execution (Profiler + RAG) ~1.5-2x faster than sequential
+- Parallel execution (Profiler + VulnLookup + RAG recall) ~1.5-2x faster than sequential
+- RAG recall adds <100ms latency (local ChromaDB query)
 - Evaluation loop adds <2s per attack vector
 
 ✅ **Learning:**
 - Training pairs capture full context (intelligence → plan → outcome → evaluation)
 - Precision/recall metrics calculable from training data
 - Confidence calibration error measurable
+- RAG memory grows with each processed session (ETL pipeline)
+- Anti-pattern recall prevents repeated failures across sessions
 
 ---
 
