@@ -3,18 +3,16 @@
 /**
  * Output from the ReasonerAgent's strategic decision-making.
  *
- * The Reasoner analyzes the current situation and decides what to do next.
- * It returns structured output that the Executor can turn into tool calls.
+ * The Reasoner analyzes the current situation and decides what HIGH-LEVEL
+ * action to take. It does NOT specify tools or arguments - that's the
+ * Executor's job. This separation allows the Executor to break down
+ * strategic actions into multiple tactical steps.
  */
 export interface ReasonerOutput {
   /** The Reasoner's analysis of the current situation */
   thought: string;
-  /** Description of the recommended action to take */
+  /** HIGH-LEVEL description of what should be done next (e.g., "Enumerate web services for vulnerabilities") */
   action: string;
-  /** Name of the tool to execute (e.g., "nmap_port_scan") - optional if just analyzing */
-  tool?: string;
-  /** Arguments to pass to the tool (e.g., { target: "192.168.1.1", ports: "1-1000" }) */
-  arguments?: Record<string, unknown>;
   /** Set to true when the reconnaissance mission is complete */
   is_complete?: boolean;
 

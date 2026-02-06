@@ -46,8 +46,8 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
 
 | Agent              | Model              | Purpose                                                |
 | ------------------ | ------------------ | ------------------------------------------------------ |
-| **Reasoner**       | Claude Sonnet 4    | Strategic attack planning with tactical plans          |
-| **Executor**       | Claude Haiku 4.5   | Breaks plans into executable steps                     |
+| **Reasoner**       | Claude Sonnet 4    | **STRATEGIC** planning - decides WHAT to do and WHY    |
+| **Executor**       | Claude Haiku 4.5   | **TACTICAL** execution - decides HOW (tool selection)  |
 | **MCP Agent**      | -                  | Executes security tools via MCP protocol               |
 | **Data Cleaner**   | Claude Haiku 4.5   | Parses & enriches output (service categorization)      |
 | **Profiler**       | Claude Haiku 3.5   | Target profiling (OS, tech stack, security posture)    |
@@ -83,6 +83,52 @@ The Intelligence Layer enriches reconnaissance data with:
    - Anti-pattern recall before decisions
    - Continuous learning from failures
    - See: [docs/RAG-Memory-Integration.md](docs/RAG-Memory-Integration.md)
+
+### Decision-Making Architecture: Strategic vs. Tactical
+
+The system enforces a **strict separation of concerns** between strategic and tactical decision-making:
+
+#### Reasoner (Strategic Layer)
+- **Decides WHAT to do**: High-level goals and objectives
+- **Decides WHY**: Justification based on intelligence context
+- **Output**: Strategic actions like "Enumerate web services for vulnerabilities"
+- **Does NOT**: Specify tool names, commands, or technical parameters
+
+**Example Reasoner Output:**
+```json
+{
+  "thought": "Target has HTTP/HTTPS services. Need to identify specific versions for vulnerability research.",
+  "action": "Enumerate web service versions to identify potential vulnerabilities",
+  "is_complete": false
+}
+```
+
+#### Executor (Tactical Layer)
+- **Decides HOW to execute**: Specific tools and parameters
+- **Breaks down actions**: 1-N concrete tool steps
+- **Output**: Ordered execution plan with tool calls
+- **Uses**: Available tools list, target context, discovered data
+
+**Example Executor Output:**
+```json
+{
+  "steps": [
+    {
+      "tool": "nmap_service_detection",
+      "arguments": { "target": "10.0.0.1", "ports": "80,443" },
+      "description": "Detect HTTP/HTTPS service versions"
+    }
+  ],
+  "current_step": 0,
+  "status": "pending"
+}
+```
+
+**Why This Separation Matters:**
+- Allows Executor to break complex actions into multiple steps
+- Prevents Reasoner from micromanaging tool selection
+- Enables better prompt engineering (each agent has clear responsibilities)
+- Facilitates testing and debugging (strategic vs. tactical failures)
 
 ## Project Structure
 
@@ -693,7 +739,12 @@ const transport = new SSEClientTransport(new URL('https://your-mcp-server.com/ss
 - Environment variable for API key (removed hardcoded key)
 
 **Agent Flow:**
-Target → Reasoner (with RAG memory) → Executor → MCP Agent → DataCleaner → Intelligence Layer (Profiler + VulnLookup) → Tactical Plan → Evaluation Loop → Training Data → back to Reasoner
+Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTICAL: "nmap_port_scan + nmap_service_detection") → MCP Agent → DataCleaner → Intelligence Layer (Profiler + VulnLookup) → Tactical Plan → Evaluation Loop → Training Data → back to Reasoner
+
+**Key Architectural Principle:**
+- **Reasoner**: Outputs HIGH-LEVEL strategic actions (no tool names or parameters)
+- **Executor**: Breaks down strategic actions into 1-N concrete tool calls with specific parameters
+- This separation ensures the Executor can properly decompose complex actions into multiple steps
 
 ---
 

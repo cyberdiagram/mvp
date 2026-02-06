@@ -31,31 +31,35 @@ export const REASONER_SYSTEM_PROMPT = `You are an expert penetration testing str
 2. INTERPRET intelligence context (target profiles, vulnerabilities, exploit data)
 3. PLAN multi-step attack strategies based on discovered vulnerabilities
 4. PREDICT attack outcomes with confidence metrics
-5. DECIDE the next best action to take
+5. DECIDE HIGH-LEVEL strategic actions (NOT specific tool calls)
 
 # Response Format
 
 Always respond with a JSON object containing:
 {
   "thought": "Your detailed reasoning about the current situation",
-  "action": "Description of what should be done next",
-  "tool": "tool_name (if a tool should be executed)",
-  "arguments": { "param": "value" },
+  "action": "HIGH-LEVEL description of what should be done next",
   "is_complete": false
 }
 
+**IMPORTANT**:
+- Your "action" should be STRATEGIC and HIGH-LEVEL (e.g., "Scan the target for open ports and services")
+- DO NOT specify specific tools, commands, or technical parameters
+- The Executor Agent will break down your high-level action into concrete tool calls
+- Focus on WHAT needs to be done and WHY, not HOW to do it
+
 Set "is_complete": true when the reconnaissance/attack phase is finished.
 
-# Available Tools
+# Strategic Examples
 
-- nmap_host_discovery: Discover live hosts on a network
-  Arguments: { "target": "IP or CIDR" }
+❌ BAD (too specific): "Run nmap_port_scan with -p 1-65535 on 192.168.1.1"
+✅ GOOD (strategic): "Perform comprehensive port scanning to identify all open services"
 
-- nmap_port_scan: Scan ports on target(s)
-  Arguments: { "target": "IP", "ports": "1-1000" or "top-1000", "scanType": "tcp" or "udp" }
+❌ BAD (tool-focused): "Execute nmap_service_detection on ports 80,443"
+✅ GOOD (goal-focused): "Enumerate web service versions to identify potential vulnerabilities"
 
-- nmap_service_detection: Detect services and versions
-  Arguments: { "target": "IP", "ports": "22,80,443" }
+❌ BAD (tactical): "Run gobuster with wordlist on http://target/admin"
+✅ GOOD (strategic): "Discover hidden web directories and administrative interfaces"
 
 # Intelligence-Driven Strategy
 
@@ -398,8 +402,6 @@ export class ReasonerAgent {
         return {
           thought: parsed.thought || '',
           action: parsed.action || '',
-          tool: parsed.tool,
-          arguments: parsed.arguments,
           is_complete: parsed.is_complete || false,
           tactical_plan: tacticalPlan,
           attack_rationale: parsed.attack_rationale,
@@ -413,12 +415,10 @@ export class ReasonerAgent {
     // Fallback: extract from text
     const thoughtMatch = text.match(/Thought:?\s*([^\n]+)/i);
     const actionMatch = text.match(/Action:?\s*([^\n]+)/i);
-    const toolMatch = text.match(/Tool:?\s*([^\n]+)/i);
 
     return {
       thought: thoughtMatch ? thoughtMatch[1].trim() : text,
       action: actionMatch ? actionMatch[1].trim() : 'Continue analysis',
-      tool: toolMatch ? toolMatch[1].trim() : undefined,
       is_complete: false,
     };
   }

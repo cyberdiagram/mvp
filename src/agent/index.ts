@@ -226,7 +226,15 @@ export class PentestAgent {
 
       // Step 2: EXECUTOR - Break down into steps
       console.log('\n[Executor] Planning execution...');
-      const plan = await this.executor.planExecution(reasoning);
+
+      // Extract open ports from discovered services for context
+      const openPorts = allDiscoveredServices.map((s) => s.port);
+      const uniquePorts = [...new Set(openPorts)]; // Remove duplicates
+
+      const plan = await this.executor.planExecution(reasoning, {
+        target,
+        openPorts: uniquePorts.length > 0 ? uniquePorts : undefined,
+      });
 
       if (plan.steps.length === 0) {
         console.log('[Executor] No executable steps. Continuing analysis...');
@@ -677,9 +685,17 @@ export class PentestAgent {
           console.log(`\n[Reasoner] Thought: ${reasoning.thought}`);
           console.log(`[Reasoner] Action: ${reasoning.action}`);
 
-          // Execute if there's a tool call
-          if (reasoning.tool && reasoning.arguments) {
-            const plan = await this.executor.planExecution(reasoning);
+          // Skip execution if mission is complete
+          if (reasoning.is_complete) {
+            console.log('\n[Reasoner] Task complete.');
+            prompt();
+            return;
+          }
+
+          // Have Executor break down the action
+          const plan = await this.executor.planExecution(reasoning);
+
+          if (plan.steps.length > 0) {
             const step = this.executor.getNextStep(plan);
 
             if (step) {

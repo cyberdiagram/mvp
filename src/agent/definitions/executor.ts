@@ -19,18 +19,29 @@ export const EXECUTOR_MAX_TOKENS = 1000;
  * System prompt that defines the Executor's role and behavior.
  *
  * Instructs the model to:
- * - Break down high-level plans into atomic tool calls
+ * - Break down high-level strategic actions into atomic tool calls
  * - Keep steps simple (one tool per step)
  * - Ensure proper sequencing (discovery before scan, etc.)
  * - Return structured JSON with steps array
  */
-export const EXECUTOR_SYSTEM_PROMPT = `You are a workflow executor for penetration testing operations.
+export const EXECUTOR_SYSTEM_PROMPT = `You are a tactical workflow executor for penetration testing operations.
 
 Your role is to:
-1. Take high-level plans from the Reasoner
-2. Break them down into executable tool calls
-3. Sequence operations correctly
-4. Report status and aggregate results
+1. Take HIGH-LEVEL strategic actions from the Reasoner
+2. Break them down into SPECIFIC, executable tool calls
+3. Sequence operations correctly with proper dependencies
+4. Choose appropriate tools and parameters
+
+# Available Tools
+
+- **nmap_host_discovery**: Discover live hosts on a network
+  Arguments: { "target": "IP or CIDR" }
+
+- **nmap_port_scan**: Scan ports on target(s)
+  Arguments: { "target": "IP", "ports": "1-1000" or "top-1000", "scanType": "tcp" or "udp" }
+
+- **nmap_service_detection**: Detect services and versions
+  Arguments: { "target": "IP", "ports": "22,80,443" }
 
 # Response Format
 
@@ -49,10 +60,33 @@ Respond with a JSON object:
 
 # Guidelines
 
+- Break down strategic actions into 1-5 concrete tool calls
 - Keep each step atomic (one tool call per step)
 - Ensure proper sequencing (discovery before scan, scan before detection)
 - Handle dependencies between steps
-- Be concise and efficient`;
+- Choose appropriate parameters based on the context
+- Be concise and efficient
+
+# Example
+
+**Input**: "Perform comprehensive port scanning to identify all open services"
+**Output**:
+{
+  "steps": [
+    {
+      "tool": "nmap_port_scan",
+      "arguments": { "target": "10.0.0.1", "ports": "top-1000", "scanType": "tcp" },
+      "description": "Scan top 1000 TCP ports"
+    },
+    {
+      "tool": "nmap_service_detection",
+      "arguments": { "target": "10.0.0.1", "ports": "discovered_ports" },
+      "description": "Detect service versions on open ports"
+    }
+  ],
+  "current_step": 0,
+  "status": "pending"
+}`;
 
 /**
  * ExecutorAgent - Converts high-level actions into executable steps.
@@ -79,38 +113,35 @@ export class ExecutorAgent {
   /**
    * Creates an execution plan from the Reasoner's output.
    *
-   * If the Reasoner already specified a tool and arguments, creates
-   * a simple single-step plan. Otherwise, calls Claude Haiku to
-   * break down the action into multiple steps.
+   * Takes the Reasoner's high-level strategic action and calls Claude Haiku
+   * to break it down into specific, executable tool steps with concrete parameters.
    *
-   * @param reasonerOutput - The Reasoner's decision with action/tool info
+   * @param reasonerOutput - The Reasoner's decision with high-level action
+   * @param contextInfo - Optional context (target IP, discovered data) to help with parameter selection
    * @returns ExecutorPlan with steps array ready for MCP Agent execution
    *
    * @example
-   * // Single tool already specified
    * const plan = await executor.planExecution({
-   *   thought: "...", action: "Scan ports",
-   *   tool: "nmap_port_scan", arguments: { target: "192.168.1.1" }
-   * });
-   * // Returns: { steps: [{ tool: "nmap_port_scan", ... }], current_step: 0, status: "pending" }
+   *   thought: "Need to identify services",
+   *   action: "Enumerate web service versions to identify potential vulnerabilities"
+   * }, { target: "192.168.1.1", openPorts: [80, 443] });
+   * // Returns: { steps: [{ tool: "nmap_service_detection", arguments: {...}, ... }], ... }
    */
-  async planExecution(reasonerOutput: ReasonerOutput): Promise<ExecutorPlan> {
-    // If Reasoner already specified a tool, create a simple single-step plan
-    if (reasonerOutput.tool && reasonerOutput.arguments) {
-      return {
-        steps: [
-          {
-            tool: reasonerOutput.tool,
-            arguments: reasonerOutput.arguments as Record<string, unknown>,
-            description: reasonerOutput.action,
-          },
-        ],
-        current_step: 0,
-        status: 'pending',
-      };
+  async planExecution(
+    reasonerOutput: ReasonerOutput,
+    contextInfo?: { target?: string; openPorts?: number[] },
+  ): Promise<ExecutorPlan> {
+    // Build context string to help Executor choose appropriate parameters
+    let contextStr = '';
+    if (contextInfo) {
+      if (contextInfo.target) {
+        contextStr += `\nTarget: ${contextInfo.target}`;
+      }
+      if (contextInfo.openPorts && contextInfo.openPorts.length > 0) {
+        contextStr += `\nKnown open ports: ${contextInfo.openPorts.join(', ')}`;
+      }
     }
 
-    // Otherwise, ask Executor to break down the action
     // Use cache_control to cache static system prompt for token optimization
     const response = await this.client.messages.create({
       model: EXECUTOR_MODEL,
@@ -125,7 +156,7 @@ export class ExecutorAgent {
       messages: [
         {
           role: 'user',
-          content: `Break down this action into executable steps:\n\nThought: ${reasonerOutput.thought}\nAction: ${reasonerOutput.action}`,
+          content: `Break down this HIGH-LEVEL action into executable tool steps:\n\nStrategic Context: ${reasonerOutput.thought}\nAction to Execute: ${reasonerOutput.action}${contextStr}`,
         },
       ],
     });

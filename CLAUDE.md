@@ -32,14 +32,16 @@ The system uses a **5-agent hierarchy** coordinated by an orchestrator:
 
 ```
 ORCHESTRATOR (src/agent/index.ts)
-├── Reasoner (Sonnet 4) - Strategic brain for attack planning
-├── Executor (Haiku 4.5) - Breaks plans into executable tool steps
+├── Reasoner (Sonnet 4) - STRATEGIC: Decides WHAT to do and WHY (no tool selection)
+├── Executor (Haiku 4.5) - TACTICAL: Decides HOW with specific tool calls (1-N steps)
 ├── MCP Agent - Executes security tools via MCP protocol
 ├── Data Cleaner (Haiku 4.5) - Parses raw output into structured JSON
 └── Profiler (Haiku 3.5) - Target profiling and intelligence analysis
 ```
 
-**Agent Flow**: Target → Reasoner (decides action) → Executor (creates steps) → MCP Agent (runs tools) → DataCleaner (parses & enriches) → Profiler (analyzes profile) → back to Reasoner with intelligence context
+**Agent Flow**: Target → Reasoner (strategic action: "scan for vulnerabilities") → Executor (tactical breakdown: "nmap_port_scan + nmap_service_detection") → MCP Agent (runs tools) → DataCleaner (parses & enriches) → Profiler (analyzes profile) → back to Reasoner with intelligence context
+
+**Key Architectural Principle**: Reasoner outputs HIGH-LEVEL strategic actions without tool names or parameters. Executor breaks these down into 1-N concrete tool calls. This separation allows proper multi-step decomposition.
 
 ### Key Components
 
@@ -51,12 +53,15 @@ ORCHESTRATOR (src/agent/index.ts)
 - `skillsLoader` - Exposed publicly for Memory Manager access
 
 **Subagent Definitions** ([src/agent/definitions/](src/agent/definitions/)):
-- [reasoner.ts](src/agent/definitions/reasoner.ts) - `ReasonerAgent` (Sonnet 4) for strategic decisions
-- [executor.ts](src/agent/definitions/executor.ts) - `ExecutorAgent` (Haiku 4.5) for workflow sequencing
+- [reasoner.ts](src/agent/definitions/reasoner.ts) - `ReasonerAgent` (Sonnet 4) outputs strategic actions (WHAT/WHY, no tools)
+- [executor.ts](src/agent/definitions/executor.ts) - `ExecutorAgent` (Haiku 4.5) breaks down actions into tool steps (HOW)
 - [mcp-agent.ts](src/agent/definitions/mcp-agent.ts) - `MCPAgent` for tool execution via MCP
 - [data-cleaner.ts](src/agent/definitions/data-cleaner.ts) - `DataCleanerAgent` (Haiku 4.5) for parsing and service categorization
 - [profiler.ts](src/agent/definitions/profiler.ts) - `ProfilerAgent` (Haiku 3.5) for target profiling
 - [types.ts](src/agent/definitions/types.ts) - Shared interfaces and Intelligence Layer types
+
+**Reasoner Output (Strategic)**: `{ thought, action, is_complete }` - No tool/arguments fields
+**Executor Output (Tactical)**: `{ steps: [{ tool, arguments, description }], current_step, status }`
 
 **Skills & Memory Manager** ([src/agent/skillsLoader.ts](src/agent/skillsLoader.ts)):
 - Loads skill documents from [src/skills/](src/skills/)*.md files
@@ -146,7 +151,7 @@ Rules are injected into the Reasoner's system prompt as:
 Key interfaces in [src/agent/definitions/types.ts](src/agent/definitions/types.ts):
 
 **Core Agent Types:**
-- `ReasonerOutput` - Strategic decisions (thought, action, tool, arguments, is_complete, tactical_plan)
+- `ReasonerOutput` - Strategic decisions (thought, action, is_complete, tactical_plan) - **NO tool/arguments**
 - `ExecutorPlan` - Execution plan with ordered steps and status
 - `ExecutorStep` - Single atomic tool call (tool, arguments, description)
 - `ToolResult` - Raw MCP tool output (success, output, error)
