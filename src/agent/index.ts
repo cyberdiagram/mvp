@@ -9,6 +9,7 @@ import {
   ProfilerAgent,
   VulnLookupAgent,
   EvaluatorAgent,
+  RAGMemoryAgent,
   CleanedData,
   DiscoveredService,
   IntelligenceContext,
@@ -34,18 +35,20 @@ export interface AgentConfig {
 /**
  * PentestAgent - Main orchestrator for the multi-agent penetration testing system.
  *
- * This class coordinates seven specialized subagents:
+ * This class coordinates eight specialized subagents:
  * - ReasonerAgent (Sonnet 4): Strategic brain with tactical planning
  * - ExecutorAgent (Haiku 4.5): Breaks plans into executable tool steps
  * - MCPAgent: Executes security tools via MCP protocol (Nmap, SearchSploit, RAG)
  * - DataCleanerAgent (Haiku 4.5): Parses and enriches tool output
  * - ProfilerAgent (Haiku 3.5): Target profiling (OS, tech stack, security posture)
  * - VulnLookupAgent: Vulnerability research via SearchSploit MCP
+ * - RAGMemoryAgent: Retrieves playbooks and anti-patterns from past experiences
  * - EvaluatorAgent (Haiku 3.5): Post-execution evaluation and labeling
  *
- * The agent follows an enhanced iterative loop with Intelligence Layer:
+ * The agent follows an enhanced iterative loop with Intelligence Layer + RAG Memory:
  * Reasoner → Executor → MCP → DataCleaner → Intelligence Layer (Profiler + VulnLookup)
- * → back to Reasoner with enriched intelligence → Evaluation Loop → Training Data
+ * → RAG Memory (Playbooks + Anti-Patterns) → back to Reasoner with full context
+ * → Evaluation Loop → Training Data
  */
 export class PentestAgent {
   /** Configuration for the agent system */
@@ -80,6 +83,9 @@ export class PentestAgent {
 
   /** Vulnerability lookup agent (SearchSploit MCP) */
   private vulnLookup: VulnLookupAgent;
+
+  /** RAG Memory agent (Playbooks + Anti-Patterns) */
+  private ragMemory: RAGMemoryAgent | null = null;
 
   /** Evaluation agent (Claude Haiku 3.5) */
   private evaluator: EvaluatorAgent;
@@ -116,6 +122,11 @@ export class PentestAgent {
     this.vulnLookup = new VulnLookupAgent(this.mcpAgent);
     this.evaluator = new EvaluatorAgent(config.anthropicApiKey);
 
+    // Initialize RAG Memory agent if enabled
+    if (config.enableRAGMemory && config.mcpServers.rag_memory) {
+      this.ragMemory = new RAGMemoryAgent(this.mcpAgent);
+    }
+
     // Generate session ID for tracking
     this.sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
@@ -148,6 +159,9 @@ export class PentestAgent {
     console.log('[Orchestrator] Ready!');
     console.log('[Orchestrator] Core Agents: Reasoner (Sonnet 4), Executor (Haiku 4.5), MCP Agent, Data Cleaner (Haiku 4.5)');
     console.log('[Orchestrator] Intelligence Layer: Profiler (Haiku 3.5), VulnLookup (SearchSploit MCP)');
+    if (this.ragMemory) {
+      console.log('[Orchestrator] RAG Memory: Enabled (Playbooks + Anti-Patterns)');
+    }
     if (this.config.enableEvaluation) {
       console.log('[Orchestrator] Evaluation: Enabled (Evaluator Haiku 3.5)');
     }
@@ -325,6 +339,47 @@ export class PentestAgent {
             // Inject intelligence into Reasoner
             this.reasoner.setIntelligenceContext(currentIntelligence);
             console.log('[Intelligence Layer] ✓ Intelligence context injected into Reasoner');
+
+            // STEP 4b: RAG MEMORY RECALL (Playbooks + Anti-Patterns)
+            if (this.ragMemory) {
+              console.log('\n[RAG Memory] Querying past experiences...');
+
+              try {
+                // Extract services and CVEs for RAG query
+                const services = allDiscoveredServices
+                  .map((s) => s.product || s.service)
+                  .filter((s) => s !== 'unknown');
+                const cves = vulnerabilities.map((v) => v.cve_id);
+                const profile = targetProfile
+                  ? `${targetProfile.os_family} ${targetProfile.tech_stack?.join(' ')}`
+                  : undefined;
+
+                // Query RAG memory for playbooks and anti-patterns
+                const ragResult = await this.ragMemory.queryMemory(
+                  {
+                    services: services.length > 0 ? services : undefined,
+                    cves: cves.length > 0 ? cves : undefined,
+                    profile,
+                  },
+                  3 // Top 3 results per type
+                );
+
+                if (ragResult.playbooks.length > 0 || ragResult.antiPatterns.length > 0) {
+                  console.log(
+                    `[RAG Memory] ✓ Found ${ragResult.playbooks.length} playbooks, ${ragResult.antiPatterns.length} anti-patterns`
+                  );
+
+                  // Inject RAG context into Reasoner
+                  this.reasoner.injectMemoryContext(ragResult.formattedText);
+                  console.log('[RAG Memory] ✓ Context injected into Reasoner');
+                } else {
+                  console.log('[RAG Memory] No relevant memories found');
+                }
+              } catch (err: unknown) {
+                const errorMsg = err instanceof Error ? err.message : String(err);
+                console.log('[RAG Memory] ⚠ Failed (continuing without memory):', errorMsg);
+              }
+            }
 
             // Attach to cleaned data
             cleanedData.intelligence = currentIntelligence;

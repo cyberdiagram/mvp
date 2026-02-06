@@ -8,3 +8,4 @@ export * from './data-cleaner.js';
 export * from './profiler.js';
 export * from './vuln-lookup.js';
 export * from './evaluator.js';
+export * from './rag-memory-agent.js';
