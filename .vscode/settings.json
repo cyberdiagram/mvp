@@ -1,17 +1,11 @@
 {
   // Make .env files visible in VSCode Explorer
   "files.exclude": {
-    // Override default exclusion for .env files
+    // Explicitly show .env file at root level (override any defaults)
+    ".env": false,
+    ".env.*": false,
     "**/.env": false,
-    "**/.env.*": false,
-
-    // Keep other common exclusions
-    "**/.git": true,
-    "**/node_modules": true,
-    "**/dist": true,
-    "**/.yalc": true,
-    "**/__pycache__": true,
-    "**/*.pyc": true
+    "**/.env.*": false
   },
 
   // Show .env files in search results
