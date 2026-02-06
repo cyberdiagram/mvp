@@ -10,7 +10,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { CleanedData, NmapScanResult } from './types.js';
+import { CleanedData, NmapScanResult, DiscoveredService, NmapPortResult } from './types.js';
 
 /** Model used for data parsing - Haiku for speed and cost efficiency */
 export const DATA_CLEANER_MODEL = 'claude-haiku-4-5-20251001';
@@ -215,15 +215,22 @@ export class DataCleanerAgent {
         0
       );
 
+      // Transform to DiscoveredService format for intelligence layer
+      const discoveredServices = this.transformToDiscoveredServices(hosts);
+
       return {
         type: toolType === 'nmap_host_discovery' ? 'nmap_hosts' : 'nmap_scan',
-        data: {
+        data: discoveredServices.length > 0 ? discoveredServices : {
           hosts,
           scan_type: 'tcp',
           target: hosts[0]?.ip || 'unknown',
           timestamp: new Date().toISOString(),
         },
-        summary: `Found ${hosts.length} host(s) with ${openPorts} open port(s)`,
+        summary: `Found ${hosts.length} host(s) with ${openPorts} open port(s)${
+          discoveredServices.length > 0
+            ? ` (${discoveredServices.length} services identified)`
+            : ''
+        }`,
       };
     } catch {
       return null;
@@ -267,6 +274,147 @@ export class DataCleanerAgent {
     }
 
     return this.parseCleanedResponse(text.text, rawOutput);
+  }
+
+  /**
+   * Categorizes a service into a logical category.
+   *
+   * Maps service names to categories like web, database, remote-access, etc.
+   * Used for intelligence layer analysis and criticality assessment.
+   *
+   * @param serviceName - Service name (e.g., "http", "mysql", "ssh")
+   * @returns Category string (web, database, remote-access, file-sharing, email, domain, other)
+   */
+  private categorizeService(serviceName: string): string {
+    const categories: Record<string, string[]> = {
+      web: ['http', 'https', 'apache', 'nginx', 'iis', 'tomcat', 'lighttpd'],
+      database: ['mysql', 'postgresql', 'mongodb', 'redis', 'mssql', 'oracle', 'mariadb'],
+      'remote-access': ['ssh', 'rdp', 'telnet', 'vnc', 'teamviewer'],
+      'file-sharing': ['smb', 'ftp', 'nfs', 'sftp', 'samba'],
+      email: ['smtp', 'imap', 'pop3', 'exchange'],
+      domain: ['ldap', 'kerberos', 'domain', 'active-directory'],
+    };
+
+    const lowerService = serviceName.toLowerCase();
+    for (const [category, services] of Object.entries(categories)) {
+      if (services.some((s) => lowerService.includes(s))) {
+        return category;
+      }
+    }
+    return 'other';
+  }
+
+  /**
+   * Calculates confidence score for service detection.
+   *
+   * Higher scores indicate more reliable detection:
+   * - Base: 0.5 (port is open)
+   * - +0.3 if version detected
+   * - +0.2 if service identified
+   *
+   * @param port - Nmap port result with service information
+   * @returns Confidence score (0-1)
+   */
+  private calculateConfidence(port: NmapPortResult): number {
+    let score = 0.5; // baseline for open port detection
+    if (port.version) score += 0.3; // version detected
+    if (port.service) score += 0.2; // service identified
+    return Math.min(score, 1.0);
+  }
+
+  /**
+   * Assesses criticality level of a service.
+   *
+   * Criticality is based on service category and well-known risky ports:
+   * - High: databases, remote access, domain controllers, risky ports
+   * - Medium: web services
+   * - Low: other services
+   *
+   * @param category - Service category from categorizeService()
+   * @param port - Port number
+   * @returns Criticality level (high, medium, low)
+   */
+  private assessCriticality(category: string, port: number): string {
+    // High criticality services
+    if (['database', 'remote-access', 'domain'].includes(category)) return 'high';
+
+    // Well-known high-risk ports
+    if ([22, 23, 3389, 445, 3306, 5432, 1433, 389].includes(port)) return 'high';
+
+    // Web services are medium
+    if (category === 'web') return 'medium';
+
+    return 'low';
+  }
+
+  /**
+   * Transforms Nmap scan results to DiscoveredService format.
+   *
+   * Enriches raw port scan data with categorization, confidence scores,
+   * and criticality assessment for intelligence layer analysis.
+   *
+   * @param hosts - Array of hosts with port information from Nmap
+   * @returns Array of DiscoveredService with enriched metadata
+   */
+  private transformToDiscoveredServices(
+    hosts: Array<{ ip: string; ports?: NmapPortResult[] }>
+  ): DiscoveredService[] {
+    const services: DiscoveredService[] = [];
+
+    for (const host of hosts) {
+      if (!host.ports) continue;
+
+      for (const port of host.ports) {
+        if (port.state !== 'open') continue;
+
+        const category = this.categorizeService(port.service || '');
+
+        services.push({
+          host: host.ip,
+          port: port.port,
+          protocol: port.protocol,
+          service: port.service || 'unknown',
+          product: this.extractProduct(port.version),
+          version: this.extractVersion(port.version),
+          banner: port.version,
+          category,
+          criticality: this.assessCriticality(category, port.port),
+          confidence: this.calculateConfidence(port),
+        });
+      }
+    }
+
+    return services;
+  }
+
+  /**
+   * Extracts product name from service banner.
+   *
+   * Example: "Apache httpd 2.4.41" → "Apache"
+   *
+   * @param banner - Service banner string
+   * @returns Product name or undefined
+   */
+  private extractProduct(banner?: string): string | undefined {
+    if (!banner) return undefined;
+    // Extract product name before version number
+    const match = banner.match(/^([A-Za-z0-9\-_]+)/);
+    return match ? match[1] : undefined;
+  }
+
+  /**
+   * Extracts version number from service banner.
+   *
+   * Example: "Apache httpd 2.4.41" → "2.4.41"
+   *
+   * @param banner - Service banner string
+   * @returns Version string or undefined
+   */
+  private extractVersion(banner?: string): string | undefined {
+    if (!banner) return undefined;
+    // Extract version numbers (e.g., "2.4.41", "8.0.23")
+    const match = banner.match(/(\d+\.[\d.]+)/);
+    return match ? match[1] : undefined;
   }
 
   /**

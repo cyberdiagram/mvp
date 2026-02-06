@@ -1,40 +1,88 @@
 # MVP - AI-Powered Penetration Testing Agent
 
-> Last Updated: 2026-02-05
+> Last Updated: 2026-02-06
+> Architecture Version: 1.3 (Intelligence Layer + Evaluation Loop + RAG Memory)
 
-An AI-powered penetration testing agent using Claude AI with a multi-agent architecture for automated security reconnaissance.
+An AI-powered penetration testing agent using Claude AI with a hierarchical multi-agent architecture, Intelligence Layer for target profiling, Evaluation Loop for continuous improvement, and RAG Memory System for learning from past experiences.
 
 ## Architecture
 
+### Overview
+
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     ORCHESTRATOR                         │
-│                  (src/agent/index.ts)                    │
-└─────────────────────────────────────────────────────────┘
-         │           │           │           │
-         ▼           ▼           ▼           ▼
-   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
-   │ REASONER │ │ EXECUTOR │ │  DATA    │ │  SKILLS  │
-   │ (sonnet) │ │ (haiku)  │ │ CLEANER  │ │  LOADER  │
-   │          │ │          │ │ (haiku)  │ │ +Memory  │
-   └──────────┘ └──────────┘ └──────────┘ └──────────┘
-                     │                          │
-                     ▼                          ▼
-              ┌──────────┐              ┌──────────────┐
-              │MCP AGENT │              │agent_rules   │
-              │  (nmap)  │              │   .json      │
-              └──────────┘              └──────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        ORCHESTRATOR                              │
+│                    (src/agent/index.ts)                          │
+│            Intelligence Layer + Evaluation Loop                  │
+└──────────────────────────────────────────────────────────────────┘
+         │           │           │           │           │
+         ▼           ▼           ▼           ▼           ▼
+   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
+   │REASONER │ │EXECUTOR │ │  DATA   │ │ SKILLS  │ │EVALUATOR│
+   │(Sonnet4)│ │(Haiku45)│ │ CLEANER │ │ LOADER  │ │(Haiku35)│
+   │Tactical │ │         │ │(Haiku45)│ │+Memory  │ │Labeling │
+   │Planning │ │         │ │Enriched │ │Manager  │ │TP/FP/FN │
+   └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘
+                     │              │                      │
+                     ▼              ▼                      ▼
+              ┌──────────┐   ┌─────────────────────┐  Training
+              │MCP AGENT │   │ INTELLIGENCE LAYER  │  Data
+              └──────────┘   └─────────────────────┘  (JSON)
+                     │              │         │
+                     ▼              ▼         ▼
+          ┌──────────────┐  ┌──────────┐ ┌──────────┐
+          │ MCP SERVERS  │  │ PROFILER │ │  VULN    │
+          ├──────────────┤  │ (Haiku35)│ │ LOOKUP   │
+          │ • Nmap       │  │ Target   │ │SearchSploit
+          │ • SearchSploit│ │ Profile  │ │ (Local)  │
+          │ • RAG Memory │  └──────────┘ └──────────┘
+          └──────────────┘      │              │
+                     │          ▼              ▼
+                     └─> Intelligence Context <─┘
+                         (OS + Tech + CVEs)
 ```
 
 ### Subagents
 
-| Agent            | Model            | Purpose                                       |
-| ---------------- | ---------------- | --------------------------------------------- |
-| **Reasoner**     | claude-sonnet-4  | Strategic attack planning, interprets results |
-| **Executor**     | claude-haiku-4.5 | Breaks plans into executable steps            |
-| **MCP Agent**    | -                | Executes nmap tools via MCP protocol          |
-| **Data Cleaner** | claude-haiku-4.5 | Parses raw output into structured JSON        |
-| **Skills Loader**| -                | Loads skills + Memory Manager rules           |
+| Agent              | Model              | Purpose                                                |
+| ------------------ | ------------------ | ------------------------------------------------------ |
+| **Reasoner**       | Claude Sonnet 4    | Strategic attack planning with tactical plans          |
+| **Executor**       | Claude Haiku 4.5   | Breaks plans into executable steps                     |
+| **MCP Agent**      | -                  | Executes security tools via MCP protocol               |
+| **Data Cleaner**   | Claude Haiku 4.5   | Parses & enriches output (service categorization)      |
+| **Profiler**       | Claude Haiku 3.5   | Target profiling (OS, tech stack, security posture)    |
+| **VulnLookup**     | -                  | Exploit research via SearchSploit MCP (offline)        |
+| **Evaluator**      | Claude Haiku 3.5   | Post-execution evaluation and ground truth labeling    |
+| **Skills Loader**  | -                  | Loads skills + Memory Manager rules                    |
+| **Session Logger** | -                  | JSONL logging for RAG Memory ETL pipeline              |
+
+### Intelligence Layer + Evaluation Loop (Phase 1-7 ✅)
+
+The Intelligence Layer enriches reconnaissance data with:
+
+1. **Service Enrichment** (Data Cleaner):
+   - Service categorization (web, database, remote-access, etc.)
+   - Confidence scoring (0-1 based on detection reliability)
+   - Criticality assessment (high, medium, low)
+   - Product/version extraction from banners
+
+2. **Target Profiling** (Profiler Agent):
+   - OS fingerprinting (family and version)
+   - Technology stack inference (LAMP, Windows Server, etc.)
+   - Security posture assessment (hardened, standard, weak)
+   - Risk level classification (high-value, medium, low)
+
+3. **Vulnerability Research** (VulnLookup Agent):
+   - Offline exploit lookup via SearchSploit MCP
+   - CVE mapping with severity scores
+   - PoC availability and local paths
+   - Platform-aware filtering
+
+4. **RAG Memory System** (Integration Points):
+   - Session logging in JSONL format
+   - Anti-pattern recall before decisions
+   - Continuous learning from failures
+   - See: [docs/RAG-Memory-Integration.md](docs/RAG-Memory-Integration.md)
 
 ## Project Structure
 
@@ -46,15 +94,26 @@ src/
 ├── skills/
 │   └── nmap_skill.md               # Skill document
 └── agent/
-    ├── index.ts                    # Orchestrator
+    ├── index.ts                    # Orchestrator with Intelligence + Evaluation
     ├── skillsLoader.ts             # Skills + Memory Manager
     └── definitions/
         ├── index.ts                # Exports
-        ├── types.ts                # Shared types
-        ├── reasoner.ts             # Reasoner (sonnet)
-        ├── executor.ts             # Executor (haiku)
+        ├── types.ts                # Shared types + Intelligence Layer types
+        ├── reasoner.ts             # Reasoner (Sonnet 4) with tactical planning
+        ├── executor.ts             # Executor (Haiku 4.5)
         ├── mcp-agent.ts            # MCP tool executor
-        └── data-cleaner.ts         # Data cleaner (haiku)
+        ├── data-cleaner.ts         # Data cleaner + service enrichment
+        ├── profiler.ts             # Profiler (Haiku 3.5) - Phase 3 ✅
+        ├── vuln-lookup.ts          # VulnLookup via SearchSploit - Phase 4a ✅
+        └── evaluator.ts            # Evaluator (Haiku 3.5) - Phase 6 ✅
+
+logs/
+├── sessions/                       # JSONL session logs for RAG ETL
+└── training_data/                  # Training pairs (JSON) for RLHF
+
+docs/
+├── Intelligence-and-Memory-Systems.md  # Unified documentation
+└── Final_Architecture_Plan_with_Evaluation_Loop-0204-from-claude.md
 ```
 
 ## Setup
@@ -88,8 +147,22 @@ npm install
 ### Environment Variables
 
 ```bash
+# Required
 export ANTHROPIC_API_KEY="your-api-key"
-export NMAP_SERVER_PATH="/path/to/nmap-server-ts/dist/index.js"  # Optional
+
+# Optional MCP Server Paths (defaults provided if not set)
+export NMAP_SERVER_PATH="/path/to/pentest-mcp-server/nmap-server-ts/dist/index.js"
+export SEARCHSPLOIT_SERVER_PATH="/path/to/pentest-mcp-server/searchsploit-server-ts/dist/index.js"
+export RAG_MEMORY_SERVER_PATH="/path/to/pentest-rag-memory/dist/server/index.js"
+
+# Evaluation & Training (optional)
+export ENABLE_EVALUATION="true"             # Enable evaluation loop
+export TRAINING_DATA_PATH="./logs/training_data"  # Training pairs storage
+
+# RAG Memory System (optional)
+export ENABLE_RAG_MEMORY="true"             # Enable RAG memory recall
+export DEEPSEEK_API_KEY="sk-xxx"            # For ETL transformation
+export CHROMADB_PATH="./data/chromadb"      # Vector database location
 ```
 
 ## Usage
@@ -113,7 +186,7 @@ When the agent starts, you'll see an interactive prompt:
   ██╔═══╝ ██╔══╝  ██║╚██╗██║   ██║   ██╔══╝  ╚════██║   ██║
   ██║     ███████╗██║ ╚████║   ██║   ███████╗███████║   ██║
   ╚═╝     ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚══════╝   ╚═╝
-                    AI-Powered Penetration Testing Agent v1.0
+                    AI-Powered Penetration Testing Agent v1.1
 
 >
 ```
@@ -222,6 +295,115 @@ npm run dev
 npm run build
 ```
 
+## Intelligence Layer
+
+### Overview
+
+The Intelligence Layer transforms raw reconnaissance data into actionable intelligence through a multi-stage enrichment pipeline:
+
+**Stage 1: Service Enrichment** (Data Cleaner)
+```typescript
+// Input: Raw Nmap output
+"22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu"
+
+// Output: DiscoveredService
+{
+  host: "192.168.1.10",
+  port: 22,
+  service: "ssh",
+  product: "OpenSSH",
+  version: "8.2p1",
+  category: "remote-access",
+  criticality: "high",
+  confidence: 1.0
+}
+```
+
+**Stage 2: Target Profiling** (Profiler Agent)
+```typescript
+// Analyzes services to generate:
+{
+  os_family: "Linux",
+  os_version: "Ubuntu 20.04",
+  tech_stack: ["SSH", "Apache", "MySQL"],
+  security_posture: "standard",
+  risk_level: "medium",
+  evidence: ["OpenSSH 8.2 indicates Ubuntu 20.04", "Standard service set"]
+}
+```
+
+**Stage 3: Vulnerability Research** (VulnLookup Agent)
+```typescript
+// Searches local ExploitDB via SearchSploit MCP:
+{
+  cve_id: "CVE-2021-41773",
+  severity: "critical",
+  description: "Apache 2.4.49 Path Traversal RCE",
+  affected_service: "Apache 2.4.49",
+  poc_available: true,
+  poc_url: "/usr/share/exploitdb/exploits/linux/webapps/50383.py",
+  exploitdb_id: "50383"
+}
+```
+
+**Stage 4: RAG Memory Recall** (Optional)
+```
+[MEMORY RECALL - WARNINGS FROM PAST EXPERIENCE]
+
+[ANTI-PATTERN WARNING]
+Scenario: SSH, port 22, remote access
+⛔ AVOID: Immediately brute-forcing SSH with wordlists
+⚠️ RISK: Fail2ban will block your IP after 3-5 attempts
+✅ SUGGESTION: Check for SSH key auth, look for exposed keys
+```
+
+### SearchSploit MCP Server Setup
+
+The VulnLookup agent requires the SearchSploit MCP Server:
+
+```bash
+# Install ExploitDB (if not installed)
+sudo apt install exploitdb
+# or: git clone https://gitlab.com/exploit-database/exploitdb.git
+
+# Build SearchSploit MCP server
+cd ../pentest-mcp-server/searchsploit-server-ts
+npm install
+npm run build
+
+# The agent will automatically connect via MCP protocol
+```
+
+**Features:**
+- Offline-capable (local ExploitDB database)
+- No rate limits (local CLI tool)
+- Instant exploit lookup by product/version/CVE
+- Full PoC code examination via `searchsploit_examine`
+- Local file paths via `searchsploit_path`
+
+### RAG Memory System Setup
+
+See [docs/RAG-Memory-Integration.md](docs/RAG-Memory-Integration.md) for full setup instructions.
+
+**Quick Start:**
+```bash
+# Clone RAG memory repository
+cd ..
+git clone <pentest-rag-memory-repo-url>
+cd pentest-rag-memory
+
+# Install and seed
+npm install
+npm run seed  # Loads 7 initial anti-patterns
+
+# Build and start MCP server
+npm run build
+npm start
+```
+
+**Main Agent Integration:**
+Session logs are automatically written to `logs/sessions/<session_id>.jsonl` for RAG ETL processing.
+
 ## MCP Server Configuration
 
 ### Local Development (Stdio)
@@ -237,6 +419,87 @@ const transport = new SSEClientTransport(new URL('https://your-mcp-server.com/ss
 ```
 
 ## Changelog
+
+### 2026-02-06 - Evaluation Loop Implementation (Phase 5-7)
+
+**Phase 5: Reasoner Tactical Planning ✅**
+- **Enhanced ReasonerAgent**: Generates TacticalPlanObject with attack vectors
+  - Prediction metrics for each attack vector (confidence, rationale, success criteria)
+  - Intelligence context injection (target profile, services, vulnerabilities)
+  - RAG memory context injection for anti-pattern warnings
+  - Tactical plan parsing and validation
+- **System Prompt Enhancement**: Added tactical planning instructions with examples
+- **Context Management**: `setIntelligenceContext()` and `injectMemoryContext()` methods
+
+**Phase 6: Evaluator Agent ✅**
+- **EvaluatorAgent**: Post-execution evaluation and outcome labeling
+  - Compares predicted outcomes vs. actual tool outputs
+  - Ground truth labels: true_positive, false_positive, false_negative, true_negative
+  - Confidence scoring for evaluation quality
+  - Fallback evaluation using regex pattern matching
+  - Prompt caching enabled (~90% token cost reduction)
+- **Model**: Claude Haiku 3.5 for fast, cost-effective evaluation
+
+**Phase 7: Orchestrator Integration ✅**
+- **Intelligence Layer Execution**: Parallel Profiler + VulnLookup after service discovery
+- **RAG Memory Recall**: Query past experiences before each Reasoner decision
+- **Evaluation Loop**: Execute tactical plan attack vectors and collect evaluations
+- **Training Data Collection**: TrainingPair generation with full context
+- **Session Logging**: JSONL format for RAG ETL pipeline consumption
+- **Helper Methods**:
+  - `runEvaluationLoop()` - Execute and evaluate attack vectors
+  - `saveTrainingData()` - Persist training pairs to JSON files
+  - `logSessionStep()` - Write session steps in JSONL format
+  - `extractOpenPorts()`, `extractTargetInfo()`, `determineOutcomeLabel()` - Data extraction utilities
+
+**Configuration Options:**
+- `enableEvaluation`: Enable evaluation loop and training data collection
+- `enableRAGMemory`: Enable RAG memory recall before decisions
+- `trainingDataPath`: Directory for training data JSON files
+- `sessionLogsPath`: Directory for session JSONL logs
+
+**Performance:**
+- Parallel intelligence gathering reduces latency
+- Prompt caching on Profiler and Evaluator (90% cost savings)
+- Session-based training data batching for efficiency
+
+**Architecture:**
+- 7 specialized agents (Reasoner, Executor, MCP, DataCleaner, Profiler, VulnLookup, Evaluator)
+- Complete Intelligence → Planning → Execution → Evaluation pipeline
+- Training data generation for continuous model improvement
+
+### 2026-02-06 - Intelligence Layer & RAG Memory Integration (Phase 1-4)
+
+**Phase 1-3: Intelligence Layer Foundation ✅**
+- **Enhanced Data Cleaner**: Service categorization, confidence scoring, criticality assessment
+- **ProfilerAgent**: OS fingerprinting, tech stack inference, security posture assessment
+- **Type System**: Comprehensive interfaces for intelligence-driven operations
+  - `DiscoveredService`, `TargetProfile`, `IntelligenceContext`
+  - `TacticalPlanObject`, `EvaluationResult`, `TrainingPair` (ready for Phase 5-6)
+
+**Phase 4a: VulnLookup Agent ✅**
+- **VulnLookupAgent**: Exploit research via SearchSploit MCP Server
+  - Offline-capable (local ExploitDB database)
+  - No rate limits, instant exploit lookup
+  - CVE mapping with severity inference
+  - Platform-aware filtering (Linux/Windows)
+  - PoC code examination and local path retrieval
+
+**Phase 4b: RAG Memory Integration Points ✅**
+- **Session Logging**: JSONL format for ETL pipeline consumption
+- **SessionStep Interface**: Structured logging of agent decisions
+- **Integration Documentation**: [docs/RAG-Memory-Integration.md](docs/RAG-Memory-Integration.md)
+- **Directory Structure**: `logs/sessions/` for session logs
+
+**Performance Optimizations:**
+- Prompt caching enabled for ProfilerAgent (~90% token cost reduction)
+- Parallel intelligence gathering (Profiler + VulnLookup)
+
+**Architecture:**
+- 7 specialized agents (Reasoner, Executor, MCP, DataCleaner, Profiler, VulnLookup, Evaluator)
+- Intelligence Layer: Service enrichment → Target profiling → Vulnerability research
+- Evaluation Loop: Tactical planning → Execution → Evaluation → Training data
+- RAG Memory System integration for continuous learning
 
 ### 2026-02-05 - Memory Manager & Interactive Mode
 
@@ -256,11 +519,175 @@ const transport = new SSEClientTransport(new URL('https://your-mcp-server.com/ss
 ### 2026-02-03 - Multi-Agent Architecture
 
 - Implemented hierarchical multi-agent system
-- Added Reasoner (sonnet) for strategic planning
-- Added Executor (haiku) for workflow orchestration
+- Added Reasoner (Sonnet 4) for strategic planning
+- Added Executor (Haiku 4.5) for workflow orchestration
 - Added MCP Agent for tool execution
-- Added Data Cleaner (haiku) for parsing raw output
+- Added Data Cleaner (Haiku 4.5) for parsing raw output
 - Removed legacy single-agent implementation
 - Environment variable for API key (removed hardcoded key)
 
-Target → Reasoner (decides action) → Executor (creates steps) → MCP Agent (runs tools) → DataCleaner (parses output) → back to Reasoner
+**Agent Flow:**
+Target → Reasoner (with RAG memory) → Executor → MCP Agent → DataCleaner → Intelligence Layer (Profiler + VulnLookup) → Tactical Plan → Evaluation Loop → Training Data → back to Reasoner
+
+---
+
+## Implementation Status
+
+### ✅ Phase 1: Data Schema Enhancement (Complete)
+- Intelligence Layer type definitions
+- Service enrichment interfaces
+- Tactical planning types
+- Evaluation and training data structures
+
+### ✅ Phase 2: Enhanced Data Cleaner (Complete)
+- Service categorization (web, database, remote-access, etc.)
+- Confidence scoring and criticality assessment
+- Product/version extraction from banners
+- DiscoveredService output format
+
+### ✅ Phase 3: Profiler Agent (Complete)
+- OS fingerprinting from service banners
+- Technology stack inference (LAMP, Windows, etc.)
+- Security posture assessment (hardened, standard, weak)
+- Risk level classification (high-value, medium, low)
+- Prompt caching for cost optimization
+
+### ✅ Phase 4a: VulnLookup Agent (Complete)
+- SearchSploit MCP integration
+- Offline exploit lookup (local ExploitDB)
+- CVE extraction and severity inference
+- Platform-aware filtering
+- PoC examination and path retrieval
+
+### ✅ Phase 4b: RAG Memory Integration Points (Complete)
+- SessionStep interface and JSONL logging structure
+- Integration documentation and setup guide
+- Directory structure for session logs
+- Ready for RAG MCP Server deployment
+
+### ✅ Phase 5: Reasoner Tactical Planning (Complete)
+- TacticalPlanObject output with attack vectors
+- Prediction metrics (confidence, rationale, success criteria)
+- Intelligence context injection (target profile, CVEs)
+- RAG memory context injection (anti-pattern warnings)
+- Tactical plan parsing and validation
+
+### ✅ Phase 6: Evaluator Agent (Complete)
+- Post-execution evaluation (TP/FP/FN/TN labeling)
+- Prediction vs. actual outcome comparison
+- Training data generation (EvaluationResult)
+- Confidence calibration and reasoning
+- Fallback evaluation using pattern matching
+
+### ✅ Phase 7: Orchestrator Integration (Complete)
+- Intelligence Layer parallel execution (Profiler + VulnLookup)
+- RAG memory recall before Reasoner decisions
+- Evaluation loop for tactical plan attack vectors
+- Training data persistence (JSON batches)
+- Session logging (JSONL format for RAG ETL)
+- Helper methods for data extraction and persistence
+
+### 📦 External Dependencies (Separate Repositories)
+
+**pentest-mcp-server:**
+- ✅ Nmap MCP Server (Complete)
+- ✅ SearchSploit MCP Server (Complete)
+
+**pentest-rag-memory (Separate Repo):**
+- ✅ Phase 1: Type definitions, ChromaDB client, seed data (Complete)
+- ⏳ Phase 2: ETL pipeline (Planned)
+- ⏳ Phase 3: RAG MCP server (Planned)
+
+---
+
+## Next Steps
+
+1. **End-to-End Testing**: Test full Intelligence + Evaluation pipeline
+   - Run reconnaissance on test targets
+   - Verify tactical plan generation with prediction metrics
+   - Validate evaluation loop execution and training data collection
+   - Check session logging for RAG ETL consumption
+
+2. **Deploy SearchSploit MCP**: Set up SearchSploit server for vulnerability lookups
+   - Install ExploitDB locally
+   - Configure SearchSploit MCP server path
+   - Test VulnLookup agent integration
+
+3. **RAG Memory System**: Complete ETL pipeline and MCP server (separate repo)
+   - Implement ETL pipeline to process session JSONL logs
+   - Extract anti-patterns from failed attack attempts
+   - Build RAG MCP server for memory recall
+   - Test memory injection into Reasoner context
+
+4. **Training Data Pipeline**: Set up RLHF/fine-tuning workflow
+   - Process collected training pairs
+   - Build preference datasets from evaluation labels
+   - Integrate with model training infrastructure
+   - Measure model improvement over time
+
+5. **Production Hardening**: Optimize for real-world usage
+   - Error handling and retry logic
+   - Rate limiting and cost controls
+   - Multi-target parallel reconnaissance
+   - Result aggregation and reporting
+
+---
+
+## Project Statistics
+
+### Code Metrics (Lines of Code)
+
+**Core Agent System** (4,178 lines):
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/agent/index.ts` | 724 | Main orchestrator with Intelligence + Evaluation |
+| `src/agent/skillsLoader.ts` | 519 | Skills loader + Memory Manager |
+| `src/agent/definitions/reasoner.ts` | 488 | Reasoner agent (Sonnet 4) with tactical planning |
+| `src/agent/definitions/types.ts` | 454 | TypeScript interfaces and type definitions |
+| `src/agent/definitions/data-cleaner.ts` | 453 | Data cleaner with service enrichment |
+| `src/agent/definitions/vuln-lookup.ts` | 380 | Vulnerability lookup via SearchSploit MCP |
+| `src/agent/definitions/evaluator.ts` | 241 | Evaluator agent (Haiku 3.5) for outcome labeling |
+| `src/agent/definitions/executor.ts` | 205 | Executor agent (Haiku 4.5) for workflow planning |
+| `src/agent/definitions/mcp-agent.ts` | 181 | MCP protocol client for tool execution |
+| `src/agent/definitions/profiler.ts` | 155 | Profiler agent (Haiku 3.5) for target profiling |
+| `src/agent/definitions/index.ts` | 10 | Module exports |
+| `src/index.ts` | 368 | Interactive CLI entry point |
+
+**Skills & Knowledge Base** (805 lines):
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/skills/nmap_skill.md` | 805 | Nmap expertise and best practices |
+
+**Documentation** (4,470 lines):
+| File | Lines | Purpose |
+|------|-------|---------|
+| `docs/Final_Architecture_Plan_with_Evaluation_Loop-0204-from-claude.md` | 2,178 | Complete architecture specification |
+| `docs/Intelligence-and-Memory-Systems.md` | 731 | Intelligence Layer + RAG Memory guide |
+| `docs/MULTI_AGENT_ARCHITECTURE-0203-from-claude.md` | 729 | Multi-agent architecture documentation |
+| `README.md` | 642 | Project overview and usage guide |
+| `CLAUDE.md` | 188 | Claude Code project instructions |
+
+**Configuration** (60 lines):
+| File | Lines | Purpose |
+|------|-------|---------|
+| `package.json` | 33 | NPM dependencies and scripts |
+| `tsconfig.json` | 19 | TypeScript compiler configuration |
+| `.prettierrc` | 8 | Code formatting rules |
+
+**Total Project Size**: 9,513 lines of code and documentation
+
+**Agent Breakdown**:
+- 7 AI agents (Reasoner, Executor, MCP, DataCleaner, Profiler, VulnLookup, Evaluator)
+- 3 Claude models (Sonnet 4, Haiku 4.5, Haiku 3.5)
+- 4 major systems (Intelligence Layer, Evaluation Loop, RAG Memory, Skills System)
+- 12+ TypeScript interfaces for type-safe agent communication
+
+---
+
+## Contributing
+
+See the architecture plan at [docs/Final_Architecture_Plan_with_Evaluation_Loop-0204-from-claude.md](docs/Final_Architecture_Plan_with_Evaluation_Loop-0204-from-claude.md) for implementation details.
+
+## License
+
+ISC

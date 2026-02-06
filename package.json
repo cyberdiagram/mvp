@@ -1,7 +1,7 @@
 {
   "name": "mvp",
-  "version": "1.0.0",
-  "description": "",
+  "version": "1.1.0",
+  "description": "AI-powered penetration testing agent with Intelligence Layer and Evaluation Loop",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",

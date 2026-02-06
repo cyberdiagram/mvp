@@ -7,7 +7,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { ReasonerOutput } from './types.js';
+import { ReasonerOutput, IntelligenceContext, TacticalPlanObject } from './types.js';
 
 /** Model used for strategic reasoning - Sonnet for best decision quality */
 export const REASONER_MODEL = 'claude-sonnet-4-20250514';
@@ -21,15 +21,17 @@ export const REASONER_MAX_TOKENS = 2000;
  * Instructs the model to:
  * - Act as a penetration testing strategist
  * - Return structured JSON responses
+ * - Use intelligence context (profiles, vulnerabilities) for informed decisions
+ * - Generate tactical plans with prediction metrics
  * - Follow a methodology: broad discovery → specific scanning → deep analysis
- * - Know about available tools (nmap_host_discovery, nmap_port_scan, etc.)
  */
-export const REASONER_SYSTEM_PROMPT = `You are an expert penetration testing strategist. Your role is to:
+export const REASONER_SYSTEM_PROMPT = `You are an expert penetration testing strategist with advanced threat intelligence capabilities. Your role is to:
 
 1. ANALYZE reconnaissance results and security findings
-2. PLAN multi-step attack strategies based on discovered vulnerabilities
-3. INTERPRET tool outputs and adjust strategies accordingly
-4. DECIDE the next best action to take
+2. INTERPRET intelligence context (target profiles, vulnerabilities, exploit data)
+3. PLAN multi-step attack strategies based on discovered vulnerabilities
+4. PREDICT attack outcomes with confidence metrics
+5. DECIDE the next best action to take
 
 # Response Format
 
@@ -55,20 +57,94 @@ Set "is_complete": true when the reconnaissance/attack phase is finished.
 - nmap_service_detection: Detect services and versions
   Arguments: { "target": "IP", "ports": "22,80,443" }
 
+# Intelligence-Driven Strategy
+
+You receive enriched intelligence including:
+- **Target Profile**: OS type, tech stack, security posture, risk level
+- **Vulnerabilities**: Known CVEs with severity scores and PoC availability
+- **Service Metadata**: Categorized services with confidence scores
+
+Use this intelligence to:
+1. Prioritize high-severity CVEs with available PoCs
+2. Adjust tactics based on security posture:
+   - **Hardened targets**: Avoid noisy attacks, use stealth techniques
+   - **Weak targets**: Safe to use aggressive enumeration
+3. Focus on high-value targets first (databases, domain controllers)
+4. Match exploits to confirmed OS/service versions
+
+# Tactical Planning Output (When Relevant)
+
+When planning attacks after service discovery, you MAY optionally include a "tactical_plan" in your response:
+
+{
+  "thought": "...",
+  "action": "...",
+  "tool": "...",
+  "arguments": {...},
+  "is_complete": false,
+
+  "tactical_plan": {
+    "plan_id": "plan_<timestamp>_<sequential>",
+    "target_ip": "192.168.1.50",
+    "context_hash": "<hash of intelligence context>",
+    "attack_vectors": [
+      {
+        "vector_id": "vec_01",
+        "priority": 1,
+        "action": {
+          "tool_name": "exploit_runner",
+          "command_template": "python3 exploits/cve-2021-41773.py --target {target}",
+          "parameters": {
+            "target": "192.168.1.50",
+            "port": 80
+          },
+          "timeout_seconds": 30
+        },
+        "prediction_metrics": {
+          "classification": {
+            "attack_type": "RCE",
+            "mitre_id": "T1190",
+            "cve_id": "CVE-2021-41773"
+          },
+          "hypothesis": {
+            "confidence_score": 0.85,
+            "rationale_tags": ["apache_2.4.49", "path_traversal", "linux_target"],
+            "expected_success": true
+          },
+          "success_criteria": {
+            "match_type": "regex_match",
+            "match_pattern": "(root:|uid=0|vulnerable)",
+            "negative_pattern": "(404 Not Found|Connection refused)"
+          }
+        }
+      }
+    ],
+    "created_at": "<ISO timestamp>"
+  }
+}
+
+**Important**: Only include tactical_plan when you have specific attack vectors to execute based on discovered vulnerabilities. For reconnaissance phases (host discovery, port scanning, service detection), omit tactical_plan and just use the standard response format.
+
+The prediction_metrics section is used by the Evaluator Agent to measure your accuracy. Be honest about your confidence scores and provide clear success criteria.
+
 # Strategy Guidelines
 
-1. Start broad (host discovery) → narrow down (port scan) → deep dive (service detection)
-2. Prioritize high-value targets: SSH, HTTP, databases, admin panels
-3. Look for version-specific vulnerabilities in discovered services
-4. Consider the attack surface systematically
-5. Document your reasoning for each decision
+1. **Reconnaissance Phase**: Start broad (host discovery) → narrow down (port scan) → deep dive (service detection)
+2. **Intelligence Phase**: Wait for target profile and vulnerability data
+3. **Attack Phase**: Generate tactical plans with prediction metrics
+4. Prioritize high-value targets: databases, domain controllers, SSH, HTTP, admin panels
+5. Look for version-specific vulnerabilities in discovered services
+6. Consider the attack surface systematically
+7. Document your reasoning for each decision
 
 # Example Flow
 
 1. Host Discovery → Find alive hosts
 2. Port Scan on alive hosts → Find open ports
 3. Service Detection on interesting ports → Find versions
-4. Analyze versions for known CVEs → Plan exploitation`;
+4. Wait for Intelligence Layer → Receive profile + vulnerabilities
+5. Analyze intelligence → Generate tactical plan with predictions
+6. Execute attack vectors → Evaluate outcomes`;
 
 /**
  * ReasonerAgent - Strategic decision-making subagent.
@@ -88,6 +164,10 @@ export class ReasonerAgent {
   private conversationHistory: Anthropic.MessageParam[] = [];
   /** Skill context injected into the system prompt */
   private skillContext: string = '';
+  /** Intelligence context for informed decision-making */
+  private intelligenceContext: IntelligenceContext | null = null;
+  /** RAG memory context for anti-pattern warnings */
+  private memoryContext: string = '';
 
   /**
    * Creates a new ReasonerAgent.
@@ -107,6 +187,32 @@ export class ReasonerAgent {
    */
   setSkillContext(context: string): void {
     this.skillContext = context;
+  }
+
+  /**
+   * Sets the intelligence context for informed decision-making.
+   *
+   * Intelligence context includes:
+   * - Discovered services with categorization and confidence scores
+   * - Target profile (OS, tech stack, security posture)
+   * - Known vulnerabilities with CVEs and PoC availability
+   *
+   * @param intelligence - Intelligence context from Intelligence Layer
+   */
+  setIntelligenceContext(intelligence: IntelligenceContext | null): void {
+    this.intelligenceContext = intelligence;
+  }
+
+  /**
+   * Injects RAG memory context (anti-pattern warnings).
+   *
+   * Memory context contains warnings from past failures to prevent
+   * repeating mistakes across sessions.
+   *
+   * @param memoryRecall - Formatted memory warnings from RAG MCP server
+   */
+  injectMemoryContext(memoryRecall: string): void {
+    this.memoryContext = memoryRecall;
   }
 
   /**
@@ -152,6 +258,100 @@ export class ReasonerAgent {
       });
     }
 
+    // Add intelligence context if available (not cached - changes per iteration)
+    if (this.intelligenceContext) {
+      const intel = this.intelligenceContext;
+      let intelText = '# Current Intelligence Context\n\n';
+
+      // Add target profile if available
+      if (intel.targetProfile) {
+        intelText += '## Target Profile\n';
+        intelText += `- OS: ${intel.targetProfile.os_family || 'Unknown'}`;
+        if (intel.targetProfile.os_version) {
+          intelText += ` (${intel.targetProfile.os_version})`;
+        }
+        intelText += '\n';
+        intelText += `- Tech Stack: ${intel.targetProfile.tech_stack?.join(', ') || 'Unknown'}\n`;
+        intelText += `- Security Posture: ${intel.targetProfile.security_posture}\n`;
+        intelText += `- Risk Level: ${intel.targetProfile.risk_level}\n`;
+        intelText += `- Evidence: ${intel.targetProfile.evidence.join('; ')}\n\n`;
+      }
+
+      // Add discovered services summary
+      if (intel.discoveredServices.length > 0) {
+        intelText += '## Discovered Services\n';
+        intelText += `Total: ${intel.discoveredServices.length} services\n\n`;
+
+        // Group by criticality
+        const critical = intel.discoveredServices.filter((s) => s.criticality === 'high');
+        const medium = intel.discoveredServices.filter((s) => s.criticality === 'medium');
+
+        if (critical.length > 0) {
+          intelText += '**High Criticality Services:**\n';
+          critical.forEach((s) => {
+            intelText += `- ${s.host}:${s.port} - ${s.service}`;
+            if (s.product) intelText += ` (${s.product}`;
+            if (s.version) intelText += ` ${s.version}`;
+            if (s.product) intelText += ')';
+            intelText += ` [${s.category}]\n`;
+          });
+          intelText += '\n';
+        }
+
+        if (medium.length > 0) {
+          intelText += '**Medium Criticality Services:**\n';
+          medium.slice(0, 5).forEach((s) => {
+            intelText += `- ${s.host}:${s.port} - ${s.service}`;
+            if (s.product) intelText += ` (${s.product}`;
+            if (s.version) intelText += ` ${s.version}`;
+            if (s.product) intelText += ')';
+            intelText += '\n';
+          });
+          if (medium.length > 5) {
+            intelText += `... and ${medium.length - 5} more\n`;
+          }
+          intelText += '\n';
+        }
+      }
+
+      // Add vulnerabilities if available
+      if (intel.vulnerabilities.length > 0) {
+        intelText += '## Known Vulnerabilities\n';
+        intelText += `Found ${intel.vulnerabilities.length} vulnerabilities\n\n`;
+
+        // Show top vulnerabilities (sorted by severity)
+        intel.vulnerabilities.slice(0, 10).forEach((v) => {
+          intelText += `**${v.cve_id}** (${v.severity}):\n`;
+          intelText += `- ${v.description}\n`;
+          intelText += `- Affects: ${v.affected_service}\n`;
+          if (v.poc_available) {
+            intelText += `- PoC Available: ${v.poc_url || 'Yes'}\n`;
+          }
+          if (v.exploitdb_id) {
+            intelText += `- ExploitDB ID: ${v.exploitdb_id}\n`;
+          }
+          intelText += '\n';
+        });
+
+        if (intel.vulnerabilities.length > 10) {
+          intelText += `... and ${intel.vulnerabilities.length - 10} more vulnerabilities\n\n`;
+        }
+      }
+
+      systemBlocks.push({
+        type: 'text',
+        text: intelText,
+      });
+    }
+
+    // Add RAG memory context if available (warnings from past failures)
+    if (this.memoryContext) {
+      systemBlocks.push({
+        type: 'text',
+        text: this.memoryContext,
+      });
+    }
+
     const response = await this.client.messages.create({
       model: REASONER_MODEL,
       max_tokens: REASONER_MAX_TOKENS,
@@ -177,6 +377,7 @@ export class ReasonerAgent {
    *
    * First tries to extract a JSON object from the response.
    * Falls back to regex-based text parsing if JSON extraction fails.
+   * Also extracts tactical plan if present.
    *
    * @param text - Raw text response from Claude
    * @returns Structured ReasonerOutput object
@@ -188,12 +389,21 @@ export class ReasonerAgent {
     if (jsonMatch) {
       try {
         const parsed = JSON.parse(jsonMatch[0]);
+
+        // Parse tactical plan if present
+        const tacticalPlan = parsed.tactical_plan
+          ? this.parseTacticalPlan(JSON.stringify(parsed.tactical_plan)) || undefined
+          : undefined;
+
         return {
           thought: parsed.thought || '',
           action: parsed.action || '',
           tool: parsed.tool,
           arguments: parsed.arguments,
           is_complete: parsed.is_complete || false,
+          tactical_plan: tacticalPlan,
+          attack_rationale: parsed.attack_rationale,
+          expected_success: parsed.expected_success,
         };
       } catch {
         // Fallback to text parsing
@@ -214,6 +424,42 @@ export class ReasonerAgent {
   }
 
   /**
+   * Parses a tactical plan from JSON text.
+   *
+   * Extracts and validates the TacticalPlanObject structure from
+   * the Reasoner's response. Returns null if parsing fails or
+   * the structure is invalid.
+   *
+   * @param jsonText - JSON string containing the tactical plan
+   * @returns TacticalPlanObject or null if parsing fails
+   */
+  private parseTacticalPlan(jsonText: string): TacticalPlanObject | null {
+    try {
+      const plan = JSON.parse(jsonText);
+
+      // Validate structure
+      if (
+        !plan.attack_vectors ||
+        !Array.isArray(plan.attack_vectors) ||
+        plan.attack_vectors.length === 0
+      ) {
+        return null;
+      }
+
+      // Ensure required fields
+      return {
+        plan_id: plan.plan_id || `plan_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        target_ip: plan.target_ip || 'unknown',
+        context_hash: plan.context_hash || '',
+        attack_vectors: plan.attack_vectors,
+        created_at: plan.created_at || new Date().toISOString(),
+      } as TacticalPlanObject;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Adds a tool execution result to the conversation history.
    *
    * This allows the Reasoner to "remember" previous tool results
@@ -229,12 +475,14 @@ export class ReasonerAgent {
   }
 
   /**
-   * Clears the conversation history to start fresh.
+   * Clears the conversation history and intelligence context to start fresh.
    *
    * Call this when starting a new reconnaissance mission
    * so previous context doesn't interfere.
    */
   reset(): void {
     this.conversationHistory = [];
+    this.intelligenceContext = null;
+    this.memoryContext = '';
   }
 }
