@@ -14,6 +14,7 @@ import {
   IntelligenceContext,
   TrainingPair,
   SessionStep,
+  TacticalPlanObject,
 } from './definitions/index.js';
 
 export interface AgentConfig {
@@ -217,6 +218,11 @@ export class PentestAgent {
 
       console.log(`[Reasoner] Thought: ${reasoning.thought}`);
       console.log(`[Reasoner] Action: ${reasoning.action}`);
+
+      // Display Tactical Plan if present
+      if (reasoning.tactical_plan) {
+        this.displayTacticalPlan(reasoning.tactical_plan);
+      }
 
       // Check if mission is complete
       if (reasoning.is_complete) {
@@ -645,6 +651,71 @@ export class PentestAgent {
       return 'success';
     }
     return 'partial';
+  }
+
+  /**
+   * Displays a tactical plan in a formatted console output.
+   *
+   * Shows detailed information about attack vectors including:
+   * - Plan metadata (plan_id, target_ip, context_hash)
+   * - Attack vectors with priorities
+   * - Tool details and parameters
+   * - Prediction metrics (attack type, confidence, success criteria)
+   *
+   * @param plan - The tactical plan object to display
+   */
+  private displayTacticalPlan(plan: TacticalPlanObject): void {
+    console.log('\n[Tactical Plan] ═══════════════════════════════════════════════════');
+    console.log(`[Tactical Plan] Plan ID: ${plan.plan_id}`);
+    console.log(`[Tactical Plan] Target: ${plan.target_ip}`);
+    console.log(`[Tactical Plan] Context Hash: ${plan.context_hash.substring(0, 16)}...`);
+    console.log(`[Tactical Plan] Created: ${new Date(plan.created_at).toLocaleString()}`);
+    console.log(`[Tactical Plan] Attack Vectors: ${plan.attack_vectors.length}`);
+    console.log('[Tactical Plan] ───────────────────────────────────────────────────────');
+
+    plan.attack_vectors.forEach((vector, index) => {
+      console.log(`\n[Tactical Plan] Vector ${index + 1}/${plan.attack_vectors.length}: ${vector.vector_id}`);
+      console.log(`[Tactical Plan]   Priority: ${vector.priority} (${vector.priority === 1 ? 'HIGHEST' : vector.priority <= 3 ? 'HIGH' : 'MEDIUM'})`);
+
+      // Action details
+      console.log(`[Tactical Plan]   Tool: ${vector.action.tool_name}`);
+      console.log(`[Tactical Plan]   Command: ${vector.action.command_template}`);
+      console.log(
+        `[Tactical Plan]   Parameters: ${JSON.stringify(vector.action.parameters, null, 2).replace(/\n/g, '\n[Tactical Plan]                   ')}`
+      );
+      console.log(`[Tactical Plan]   Timeout: ${vector.action.timeout_seconds}s`);
+
+      // Prediction metrics
+      const pred = vector.prediction_metrics;
+      console.log(`[Tactical Plan]   Classification:`);
+      console.log(`[Tactical Plan]     - Attack Type: ${pred.classification.attack_type}`);
+      console.log(`[Tactical Plan]     - MITRE ATT&CK: ${pred.classification.mitre_id}`);
+      if (pred.classification.cve_id) {
+        console.log(`[Tactical Plan]     - CVE: ${pred.classification.cve_id}`);
+      }
+
+      console.log(`[Tactical Plan]   Hypothesis:`);
+      console.log(
+        `[Tactical Plan]     - Confidence: ${(pred.hypothesis.confidence_score * 100).toFixed(1)}%`
+      );
+      console.log(
+        `[Tactical Plan]     - Expected Success: ${pred.hypothesis.expected_success ? '✓ YES' : '✗ NO'}`
+      );
+      console.log(
+        `[Tactical Plan]     - Rationale: ${pred.hypothesis.rationale_tags.join(', ')}`
+      );
+
+      console.log(`[Tactical Plan]   Success Criteria:`);
+      console.log(`[Tactical Plan]     - Match Type: ${pred.success_criteria.match_type}`);
+      console.log(`[Tactical Plan]     - Pattern: ${pred.success_criteria.match_pattern}`);
+      if (pred.success_criteria.negative_pattern) {
+        console.log(
+          `[Tactical Plan]     - Negative Pattern: ${pred.success_criteria.negative_pattern}`
+        );
+      }
+    });
+
+    console.log('\n[Tactical Plan] ═══════════════════════════════════════════════════\n');
   }
 
   /**
