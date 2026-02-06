@@ -2,7 +2,7 @@
 
 **Generated:** 2026-02-04
 **Updated:** 2026-02-06
-**Version:** 1.1
+**Version:** 1.2
 **Status:** Implementation Plan
 
 ---
@@ -11,7 +11,7 @@
 
 This document combines three architectural upgrades to transform the MVP pentest agent into a production-grade intelligent system with self-improving capabilities:
 
-1. **Intelligence Layer** - Target profiling and CVE lookup (Profiler + RAG Agent)
+1. **Intelligence Layer** - Target profiling and exploit lookup via SearchSploit MCP (Profiler + VulnLookup)
 2. **Tactical Planning** - Structured attack vectors with predictive metrics
 3. **Evaluation Loop** - Automated learning from execution results (Evaluator Agent)
 
@@ -43,19 +43,19 @@ This document combines three architectural upgrades to transform the MVP pentest
          │  │          INTELLIGENCE LAYER (Parallel)               │
          │  ├──────────────┬──────────────────┬────────────────────┤
          │  │  PROFILER    │  VULN LOOKUP     │  RAG MEMORY        │
-         │  │  (Haiku)     │  (APIs)          │  (ChromaDB MCP)    │
-         │  │              │                  │                    │
-         │  │ • OS detect  │ • NVD API        │ • Anti-patterns    │
-         │  │ • Tech stack │ • ExploitDB      │ • Past failures    │
-         │  │ • Security   │ • CVE scoring    │ • Human lessons    │
-         │  │   posture    │ • PoC mapping    │ • Playbooks        │
+         │  │  (Haiku)     │  (SearchSploit   │  (ChromaDB MCP)    │
+         │  │              │   MCP Server)    │                    │
+         │  │ • OS detect  │ • searchsploit   │ • Anti-patterns    │
+         │  │ • Tech stack │   _search        │ • Past failures    │
+         │  │ • Security   │ • searchsploit   │ • Human lessons    │
+         │  │   posture    │   _examine       │ • Playbooks        │
          │  └──────────────┴──────────────────┴────────────────────┘
          │                             │
          │                             ▼
          │              ┌──────────────────────────────────────┐
          │              │   REASONER (Sonnet)                  │
          │              │                                      │
-         │              │ Input: Profile + CVEs + Services     │
+         │              │ Input: Profile + Exploits + Services  │
          │              │      + RAG Memory Warnings           │
          │              │ Output: TacticalPlanObject           │
          │              │  ├── attack_vectors[]                │
@@ -517,55 +517,108 @@ Be concise and evidence-based. If uncertain, state "Unknown" rather than guessin
 
 The Intelligence Layer consists of three parallel subsystems that enrich the Reasoner's context before each decision. The **Profiler** (Phase 3) handles target profiling. This phase covers the remaining two:
 
-- **Phase 4a: VulnLookupAgent** — Real-time CVE lookup from NVD and ExploitDB
+- **Phase 4a: VulnLookupAgent** — Exploit/CVE lookup via SearchSploit MCP Server (local ExploitDB)
 - **Phase 4b: RAG Memory System** — Long-term anti-pattern memory via ChromaDB (separate repo: `pentest-rag-memory`)
 
-#### Phase 4a: VulnLookup Agent (Real-Time CVE Lookup)
+#### Phase 4a: VulnLookup Agent (Exploit Lookup via SearchSploit MCP)
 
-**Goal:** Real-time vulnerability research using external APIs
+**Goal:** Vulnerability and exploit research using the SearchSploit MCP Server (local ExploitDB)
+
+**Architecture Change:** Instead of making HTTP requests to NVD and ExploitDB web APIs, the VulnLookupAgent now connects to the **SearchSploit MCP Server** from the `pentest-mcp-server` repository. This provides:
+
+- **Offline-capable** lookups against the local ExploitDB database
+- **No rate limits** (local CLI tool, no external API dependency)
+- **Structured JSON output** with exploit metadata, CVE codes, and local file paths
+- **PoC access** — can examine exploit code and get local paths directly
+- **Consistent MCP interface** — same protocol as nmap and RAG memory servers
+
+**SearchSploit MCP Server Tools (from `pentest-mcp-server/searchsploit-server-ts`):**
+
+| Tool | Purpose | Key Parameters |
+|------|---------|----------------|
+| `searchsploit_search` | Search ExploitDB by keyword/CVE/product | query, exact, title, exclude, cve |
+| `searchsploit_examine` | Get full exploit details + code by EDB-ID | edbId |
+| `searchsploit_path` | Get local filesystem path for exploit | edbId |
 
 **Dependencies:**
+
+No additional npm packages needed — the VulnLookupAgent communicates via the MCP protocol through the existing `MCPAgent` infrastructure. The SearchSploit MCP Server is a separate process from `pentest-mcp-server`.
+
 ```bash
-npm install axios node-cache
+# Ensure searchsploit CLI is installed (ExploitDB's official tool)
+sudo apt install exploitdb  # or: git clone https://gitlab.com/exploit-database/exploitdb.git
+
+# Build the SearchSploit MCP server
+cd ../pentest-mcp-server/searchsploit-server-ts && npm run build
 ```
 
 **New file: `src/agent/definitions/vuln-lookup.ts`**
 
 ```typescript
-import axios from 'axios'
-import NodeCache from 'node-cache'
 import { DiscoveredService, TargetProfile, VulnerabilityInfo } from './types.js'
 
 /**
- * VulnLookupAgent performs real-time vulnerability research using external APIs.
+ * SearchSploit search result from MCP server
+ */
+interface SearchSploitResult {
+  success: boolean
+  search: string
+  summary: string
+  exploits: SearchSploitExploit[]
+  shellcodes: SearchSploitExploit[]
+  papers: SearchSploitExploit[]
+  command: string
+  error?: string
+}
+
+/**
+ * Individual exploit from SearchSploit
+ */
+interface SearchSploitExploit {
+  Title: string
+  'EDB-ID': string
+  Date_Published: string
+  Author: string
+  Type: string
+  Platform: string
+  Port: string
+  Verified: string
+  Codes: string         // CVE codes, comma-separated
+  Path: string          // Local file path
+}
+
+/**
+ * VulnLookupAgent performs vulnerability research via the SearchSploit MCP Server.
  *
- * Data Sources:
- * - NVD (National Vulnerability Database) - CVE data with CVSS scores
- * - ExploitDB - Public exploit/PoC availability
+ * Data Source:
+ * - SearchSploit MCP Server (pentest-mcp-server/searchsploit-server-ts)
+ *   → wraps the searchsploit CLI → queries local ExploitDB database
  *
  * Features:
- * - Caching to avoid rate limits (1-hour TTL)
- * - OS-aware filtering (skip Windows CVEs for Linux targets)
- * - Severity-based prioritization
+ * - Offline-capable: No external API calls, uses local ExploitDB database
+ * - No rate limits: Local CLI tool, unlimited queries
+ * - PoC access: Can examine full exploit code via searchsploit_examine
+ * - OS/platform-aware filtering
+ * - Severity inference from exploit type and platform
  *
- * Note: This is NOT the RAG memory system. This agent performs live API lookups.
+ * Connection Flow:
+ *   VulnLookupAgent → MCPAgent → SearchSploit MCP Server → searchsploit CLI → ExploitDB (local)
+ *
+ * Note: This is NOT the RAG memory system. This agent performs exploit lookups.
  * For learned anti-patterns from past sessions, see the RAG Memory System (Phase 4b).
  */
 export class VulnLookupAgent {
-  private cache: NodeCache
-  private nvdApiKey?: string
+  private mcpAgent: MCPAgent  // Shared MCP agent for tool execution
 
-  constructor(nvdApiKey?: string) {
-    this.nvdApiKey = nvdApiKey
-    // Cache CVE results for 1 hour (3600 seconds)
-    this.cache = new NodeCache({ stdTTL: 3600 })
+  constructor(mcpAgent: MCPAgent) {
+    this.mcpAgent = mcpAgent
   }
 
   /**
-   * Find vulnerabilities for discovered services
+   * Find vulnerabilities for discovered services using SearchSploit MCP
    *
    * @param services - Services to research
-   * @param profile - Optional target profile for OS filtering
+   * @param profile - Optional target profile for OS/platform filtering
    * @returns Array of vulnerabilities sorted by severity
    */
   async findVulnerabilities(
@@ -575,40 +628,54 @@ export class VulnLookupAgent {
     const allVulnerabilities: VulnerabilityInfo[] = []
 
     for (const service of services) {
-      // Skip if no version info (can't search CVEs without version)
-      if (!service.product || !service.version) {
-        console.debug(`[VulnLookup] Skipping ${service.service} - no version info`)
+      // Skip if no product info (can't search without product name)
+      if (!service.product) {
+        console.debug(`[VulnLookup] Skipping ${service.service} - no product info`)
         continue
       }
 
-      // Check cache first
-      const cacheKey = `${service.product}:${service.version}`
-      const cached = this.cache.get<VulnerabilityInfo[]>(cacheKey)
-      if (cached) {
-        console.debug(`[VulnLookup] Cache hit for ${cacheKey}`)
-        allVulnerabilities.push(...cached)
-        continue
+      // Build search query: "product version" (e.g., "apache 2.4.49")
+      const query = service.version
+        ? `${service.product} ${service.version}`
+        : service.product
+
+      console.debug(`[VulnLookup] Searching SearchSploit for: ${query}`)
+
+      try {
+        // Call searchsploit_search via MCP
+        const result = await this.mcpAgent.executeTool({
+          tool: 'searchsploit_search',
+          arguments: {
+            query,
+            exclude: ['dos', 'Denial of Service'],  // Skip DoS by default
+          },
+          description: `Search exploits for ${query}`
+        })
+
+        if (result.success && result.output) {
+          const searchResult: SearchSploitResult = JSON.parse(result.output)
+
+          if (searchResult.success) {
+            // Transform SearchSploit results to VulnerabilityInfo
+            const vulns = this.transformResults(searchResult, service)
+
+            // Filter by OS/platform if profile available
+            const filtered = profile
+              ? this.filterByPlatform(vulns, profile.os_family)
+              : vulns
+
+            allVulnerabilities.push(...filtered)
+
+            console.debug(
+              `[VulnLookup] Found ${searchResult.exploits.length} exploits, ` +
+              `${searchResult.shellcodes.length} shellcodes for ${query}`
+            )
+          }
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error(`[VulnLookup] SearchSploit query failed for ${query}: ${message}`)
       }
-
-      console.debug(`[VulnLookup] Querying NVD for ${cacheKey}`)
-
-      // Query NVD API
-      const cves = await this.queryNVD(service.product, service.version)
-
-      // Query ExploitDB for PoCs
-      const enrichedCves = await this.enrichWithPoCs(cves)
-
-      // Filter by OS if profile available
-      const filtered = profile
-        ? this.filterByOS(enrichedCves, profile.os_family)
-        : enrichedCves
-
-      // Cache results
-      this.cache.set(cacheKey, filtered)
-      allVulnerabilities.push(...filtered)
-
-      // Rate limiting: small delay between requests
-      await this.sleep(200)
     }
 
     // Sort by severity (critical/high first)
@@ -621,108 +688,139 @@ export class VulnLookupAgent {
   }
 
   /**
-   * Query NVD API for CVEs affecting a specific product/version
+   * Examine a specific exploit by EDB-ID to get full details and code
    */
-  private async queryNVD(
-    product: string,
-    version: string
-  ): Promise<VulnerabilityInfo[]> {
+  async examineExploit(edbId: string): Promise<string | null> {
     try {
-      const headers = this.nvdApiKey
-        ? { 'apiKey': this.nvdApiKey }
-        : {}
+      const result = await this.mcpAgent.executeTool({
+        tool: 'searchsploit_examine',
+        arguments: { edbId },
+        description: `Examine exploit EDB-${edbId}`
+      })
 
-      // NVD API v2.0 endpoint
-      const response = await axios.get(
-        'https://services.nvd.nist.gov/rest/json/cves/2.0',
-        {
-          params: {
-            keywordSearch: `${product} ${version}`,
-            resultsPerPage: 20
-          },
-          headers,
-          timeout: 10000
+      if (result.success && result.output) {
+        const examineResult = JSON.parse(result.output)
+        return examineResult.output || null
+      }
+      return null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Get local file path for an exploit by EDB-ID
+   */
+  async getExploitPath(edbId: string): Promise<string | null> {
+    try {
+      const result = await this.mcpAgent.executeTool({
+        tool: 'searchsploit_path',
+        arguments: { edbId },
+        description: `Get path for exploit EDB-${edbId}`
+      })
+
+      if (result.success && result.output) {
+        const pathResult = JSON.parse(result.output)
+        return pathResult.path || null
+      }
+      return null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Transform SearchSploit results into VulnerabilityInfo format
+   */
+  private transformResults(
+    searchResult: SearchSploitResult,
+    service: DiscoveredService
+  ): VulnerabilityInfo[] {
+    const vulns: VulnerabilityInfo[] = []
+
+    for (const exploit of searchResult.exploits) {
+      // Extract CVE IDs from the Codes field (e.g., "CVE-2021-41773;CVE-2021-42013")
+      const cveIds = this.extractCVEs(exploit.Codes)
+
+      // Infer severity from exploit type
+      const severity = this.inferSeverity(exploit.Type, exploit.Verified)
+
+      if (cveIds.length > 0) {
+        // Create one entry per CVE
+        for (const cveId of cveIds) {
+          vulns.push({
+            cve_id: cveId,
+            severity,
+            description: exploit.Title,
+            affected_service: `${service.product} ${service.version || ''}`.trim(),
+            poc_available: true,  // SearchSploit entries ARE PoCs
+            poc_url: exploit.Path,
+            exploitdb_id: exploit['EDB-ID']
+          })
         }
-      )
-
-      const vulnerabilities: VulnerabilityInfo[] = []
-
-      for (const cve of response.data.vulnerabilities || []) {
-        const cveData = cve.cve
-        const metrics = cveData.metrics?.cvssMetricV31?.[0] || cveData.metrics?.cvssMetricV2?.[0]
-
-        vulnerabilities.push({
-          cve_id: cveData.id,
-          severity: this.mapCVSSSeverity(metrics?.cvssData?.baseScore || 0),
-          cvss_score: metrics?.cvssData?.baseScore,
-          description: cveData.descriptions?.[0]?.value || 'No description',
-          affected_service: `${product} ${version}`,
-          poc_available: false,  // Will be enriched by ExploitDB
-          poc_url: undefined,
-          exploitdb_id: undefined
+      } else {
+        // No CVE — still valuable as an exploit finding
+        vulns.push({
+          cve_id: `EDB-${exploit['EDB-ID']}`,
+          severity,
+          description: exploit.Title,
+          affected_service: `${service.product} ${service.version || ''}`.trim(),
+          poc_available: true,
+          poc_url: exploit.Path,
+          exploitdb_id: exploit['EDB-ID']
         })
       }
+    }
 
-      console.debug(`[VulnLookup] NVD returned ${vulnerabilities.length} CVEs for ${product} ${version}`)
-      return vulnerabilities
+    return vulns
+  }
 
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error)
-      console.error(`[VulnLookup] NVD API error: ${message}`)
-      return []
+  /**
+   * Extract CVE IDs from SearchSploit Codes field
+   * Input: "CVE-2021-41773;CVE-2021-42013" or "OSVDB-12345" or ""
+   */
+  private extractCVEs(codes: string): string[] {
+    if (!codes) return []
+    const matches = codes.match(/CVE-\d{4}-\d+/g)
+    return matches || []
+  }
+
+  /**
+   * Infer severity from exploit type
+   * SearchSploit types: "local", "remote", "webapps", "dos", "shellcode"
+   */
+  private inferSeverity(type: string, verified: string): string {
+    const isVerified = verified === '1'
+
+    switch (type.toLowerCase()) {
+      case 'remote':
+        return isVerified ? 'critical' : 'high'
+      case 'webapps':
+        return isVerified ? 'high' : 'medium'
+      case 'local':
+        return 'medium'
+      case 'shellcode':
+        return 'high'
+      default:
+        return 'medium'
     }
   }
 
   /**
-   * Enrich CVEs with PoC information from ExploitDB
+   * Filter vulnerabilities by target OS/platform
    */
-  private async enrichWithPoCs(
-    cves: VulnerabilityInfo[]
-  ): Promise<VulnerabilityInfo[]> {
-    for (const cve of cves) {
-      try {
-        // ExploitDB search by CVE ID
-        const response = await axios.get(
-          `https://www.exploit-db.com/search`,
-          {
-            params: { cve: cve.cve_id },
-            timeout: 5000
-          }
-        )
-
-        // Parse HTML response to find exploit links
-        // Note: In production, use proper HTML parser or ExploitDB's official API
-        const hasExploit = response.data.includes('exploit/download')
-
-        if (hasExploit) {
-          cve.poc_available = true
-          cve.poc_url = `https://www.exploit-db.com/exploits/?cve=${cve.cve_id}`
-          console.debug(`[VulnLookup] Found PoC for ${cve.cve_id}`)
-        }
-
-      } catch (error: unknown) {
-        // Non-critical, continue without PoC info
-        console.debug(`[VulnLookup] ExploitDB lookup failed for ${cve.cve_id}`)
-      }
-    }
-
-    return cves
-  }
-
-  /**
-   * Filter CVEs by target OS family
-   */
-  private filterByOS(
-    cves: VulnerabilityInfo[],
+  private filterByPlatform(
+    vulns: VulnerabilityInfo[],
     osFamily?: string
   ): VulnerabilityInfo[] {
-    if (!osFamily) return cves
+    if (!osFamily) return vulns
 
-    return cves.filter(cve => {
-      const desc = cve.description.toLowerCase()
-      const os = osFamily.toLowerCase()
+    const os = osFamily.toLowerCase()
 
-      // Basic heuristic filtering
+    return vulns.filter(vuln => {
+      const desc = vuln.description.toLowerCase()
+
+      // Basic heuristic: skip obviously wrong platform
       if (os.includes('linux') && desc.includes('windows') && !desc.includes('linux')) {
         return false
       }
@@ -732,23 +830,6 @@ export class VulnLookupAgent {
 
       return true
     })
-  }
-
-  /**
-   * Map CVSS score to severity level
-   */
-  private mapCVSSSeverity(score: number): string {
-    if (score >= 9.0) return 'critical'
-    if (score >= 7.0) return 'high'
-    if (score >= 4.0) return 'medium'
-    return 'low'
-  }
-
-  /**
-   * Sleep utility for rate limiting
-   */
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms))
   }
 }
 ```
@@ -764,11 +845,12 @@ export class VulnLookupAgent {
 **Key Difference from VulnLookup:**
 | Aspect | VulnLookupAgent (Phase 4a) | RAG Memory System (Phase 4b) |
 |--------|---------------------------|------------------------------|
-| **Data Source** | External APIs (NVD, ExploitDB) | Internal experience (past sessions) |
-| **Knowledge Type** | Known CVEs for specific versions | Anti-patterns, playbooks, tool preferences |
+| **Data Source** | SearchSploit MCP Server (local ExploitDB) | Internal experience (past sessions) |
+| **Knowledge Type** | Known exploits/CVEs for specific products | Anti-patterns, playbooks, tool preferences |
 | **When Queried** | After service discovery | Before every Reasoner decision |
-| **Storage** | In-memory cache (1hr TTL) | ChromaDB vector store (persistent) |
+| **Storage** | No caching needed (local CLI, fast) | ChromaDB vector store (persistent) |
 | **Learning** | No learning (static lookups) | Continuously learns from failures |
+| **Network** | Offline-capable (local database) | Offline (local ChromaDB) |
 
 **Architecture:**
 
@@ -1306,7 +1388,7 @@ Evaluate this result.`
 
 ```typescript
 import { ProfilerAgent } from './definitions/profiler.js'
-import { VulnLookupAgent } from './definitions/vuln-lookup.js'
+import { VulnLookupAgent } from './definitions/vuln-lookup.js'  // Uses SearchSploit MCP
 import { EvaluatorAgent } from './definitions/evaluator.js'
 import {
   IntelligenceContext,
@@ -1318,11 +1400,11 @@ import {
 // Update AgentConfig interface
 export interface AgentConfig {
   anthropicApiKey: string
-  nvdApiKey?: string        // NEW
   skillsDir: string
   mcpServers: {
     nmap: { path: string }
-    rag_memory?: { path: string }  // NEW: RAG Memory MCP server
+    searchsploit: { path: string }  // NEW: SearchSploit MCP server
+    rag_memory?: { path: string }   // NEW: RAG Memory MCP server
   }
   enableEvaluation?: boolean  // NEW: Enable evaluation loop
   enableRAGMemory?: boolean   // NEW: Enable RAG memory recall
@@ -1338,7 +1420,7 @@ export class PentestAgent {
   private mcpAgent: MCPAgent
   private dataCleaner: DataCleanerAgent
   private profiler: ProfilerAgent           // NEW
-  private vulnLookup: VulnLookupAgent       // NEW (renamed from RAGAgent)
+  private vulnLookup: VulnLookupAgent       // NEW: Uses SearchSploit MCP
   private evaluator: EvaluatorAgent         // NEW
 
   private sessionId: string                 // NEW: For tracking
@@ -1353,7 +1435,7 @@ export class PentestAgent {
     this.mcpAgent = new MCPAgent()
     this.dataCleaner = new DataCleanerAgent(config.anthropicApiKey)
     this.profiler = new ProfilerAgent(config.anthropicApiKey)
-    this.vulnLookup = new VulnLookupAgent(config.nvdApiKey)
+    this.vulnLookup = new VulnLookupAgent(this.mcpAgent)  // Shares MCPAgent for SearchSploit tools
     this.evaluator = new EvaluatorAgent(config.anthropicApiKey)
 
     // Generate session ID
@@ -1682,8 +1764,9 @@ async function main() {
     process.exit(1)
   }
 
-  // NEW: Optional API keys
-  const nvdApiKey = process.env.NVD_API_KEY
+  // NEW: SearchSploit MCP server path
+  const searchsploitPath = process.env.SEARCHSPLOIT_SERVER_PATH ||
+    path.resolve('../pentest-mcp-server/searchsploit-server-ts/dist/index.js')
 
   // NEW: RAG Memory MCP server path
   const ragMemoryPath = process.env.RAG_MEMORY_SERVER_PATH ||
@@ -1692,11 +1775,11 @@ async function main() {
   // Configuration
   const config = {
     anthropicApiKey,
-    nvdApiKey,                                    // NEW
     skillsDir: path.resolve('./src/skills'),
     mcpServers: {
       nmap: { path: nmapPath },
-      rag_memory: { path: ragMemoryPath },        // NEW: RAG Memory MCP
+      searchsploit: { path: searchsploitPath },   // NEW: SearchSploit MCP
+      rag_memory: { path: ragMemoryPath },         // NEW: RAG Memory MCP
     },
     enableEvaluation: true,                      // NEW
     enableRAGMemory: true,                       // NEW: Enable RAG memory recall
@@ -1721,11 +1804,9 @@ Update `.env` or export these variables:
 # Required
 export ANTHROPIC_API_KEY="sk-ant-..."
 
-# Optional but recommended
-export NVD_API_KEY="your-nvd-api-key"  # Get from https://nvd.nist.gov/developers/request-an-api-key
-
 # Optional
 export NMAP_SERVER_PATH="/path/to/nmap-server-ts/dist/index.js"
+export SEARCHSPLOIT_SERVER_PATH="/path/to/searchsploit-server-ts/dist/index.js"
 export RAG_MEMORY_SERVER_PATH="/path/to/pentest-rag-memory/dist/server/index.js"
 
 # Required by pentest-rag-memory (for ETL pipeline)
@@ -1745,11 +1826,12 @@ export CHROMADB_PATH="./data/chromadb"  # Vector database location
     "@anthropic-ai/claude-agent-sdk": "^0.2.29",
     "@anthropic-ai/sdk": "^0.72.1",
     "@cyber/mcp-nmap-client": "file:.yalc/@cyber/mcp-nmap-client",
-    "axios": "^1.6.0",
-    "node-cache": "^5.1.2",
     "typescript": "^5.9.3"
   }
 }
+```
+
+> **Note:** `axios` and `node-cache` are no longer needed — VulnLookupAgent now uses the shared MCPAgent to call SearchSploit tools via MCP protocol instead of making direct HTTP requests.
 ```
 
 **pentest-rag-memory package.json (separate repo):**
@@ -1774,6 +1856,9 @@ Install:
 # Main agent
 npm install
 
+# SearchSploit MCP server (in pentest-mcp-server repo)
+cd ../pentest-mcp-server/searchsploit-server-ts && npm install && npm run build
+
 # RAG memory system (separate repo)
 cd ../pentest-rag-memory && npm install
 ```
@@ -1796,9 +1881,9 @@ mvp/ (main agent repository)
 │   │       ├── mcp-agent.ts                  # No changes
 │   │       ├── data-cleaner.ts               # MODIFIED: discoveredServices schema
 │   │       ├── profiler.ts                   # NEW: Target profiling
-│   │       ├── vuln-lookup.ts                # NEW: CVE/vulnerability lookup (NVD + ExploitDB)
+│   │       ├── vuln-lookup.ts                # NEW: Exploit lookup via SearchSploit MCP
 │   │       └── evaluator.ts                  # NEW: Outcome evaluation
-│   ├── index.ts                              # MODIFIED: Add NVD_API_KEY, RAG config, session logging
+│   ├── index.ts                              # MODIFIED: Add SearchSploit MCP, RAG config, session logging
 │   └── skills/
 │       └── nmap_skill.md                     # No changes
 ├── training_data/                            # NEW: Training pairs storage
@@ -1808,6 +1893,18 @@ mvp/ (main agent repository)
     └── sessions/
         ├── session_1738012345_abc123.jsonl
         └── session_1738023456_def456.jsonl
+
+pentest-mcp-server/ (separate repository — MCP tool servers)
+├── nmap-server-ts/                              # ✅ COMPLETE: Nmap MCP server
+│   ├── index.ts                                 # 5 tools: host_discovery, port_scan, service_detection, script_scan, full_scan
+│   └── dist/index.js                            # Compiled server entry point
+├── nmap-client-ts/                              # ✅ COMPLETE: Nmap MCP client SDK
+│   └── src/client.ts                            # NmapMCPClient class
+├── searchsploit-server-ts/                      # ✅ COMPLETE: SearchSploit MCP server
+│   ├── index.ts                                 # 3 tools: searchsploit_search, searchsploit_examine, searchsploit_path
+│   └── dist/index.js                            # Compiled server entry point
+└── searchsploit-client-ts/                      # ✅ COMPLETE: SearchSploit MCP client SDK
+    └── src/client.ts                            # SearchSploitMCPClient class
 
 pentest-rag-memory/ (separate repository — RAG memory system)
 ├── src/
@@ -1856,13 +1953,17 @@ pentest-rag-memory/ (separate repository — RAG memory system)
    - Telnet + FTP + old SMB → "weak" posture
    ```
 
-2. **VulnLookup Agent:**
+2. **VulnLookup Agent (SearchSploit MCP):**
    ```bash
-   # Test NVD API integration
-   - Apache 2.4.49 → finds CVE-2021-41773
-   - Caching works (2nd query instant)
-   - Rate limiting handled gracefully
-   - OS filtering (Linux CVEs only for Linux target)
+   # Test SearchSploit MCP integration
+   - searchsploit_search "apache 2.4.49" → finds exploits with CVE-2021-41773
+   - searchsploit_search with cve param → finds by CVE ID
+   - searchsploit_examine by EDB-ID → returns full exploit code
+   - searchsploit_path by EDB-ID → returns local file path
+   - CVE extraction from Codes field → parses "CVE-2021-41773;CVE-2021-42013"
+   - Platform filtering (Linux exploits only for Linux target)
+   - DoS exclusion filter works (--exclude="dos")
+   - Severity inference: remote+verified → critical, webapps → high/medium
    ```
 
 3. **RAG Memory System:**
@@ -1904,8 +2005,8 @@ npm start recon scanme.nmap.org
 [Data Cleaner] ✓ Type: nmap_scan
 [Intelligence Layer] Starting parallel analysis...
 [Profiler] ✓ Profile: Linux - hardened
-[VulnLookup] ✓ Found 2 vulnerabilities
-  - CVE-2021-XXXX (high)
+[VulnLookup] ✓ Found 3 exploits, 0 shellcodes
+  - CVE-2021-XXXX (high) [EDB-50383]
 [RAG Memory] Querying past experience...
 [RAG Memory] ✓ Injecting warnings into Reasoner context
 [Reasoner] Generating tactical plan...
@@ -1923,7 +2024,7 @@ npm start recon scanme.nmap.org
 - Expected:
   - RAG Memory → recalls "noisy scan" + "SSH brute-force" anti-patterns
   - Profiler → "hardened", "low" risk
-  - VulnLookup → minimal CVEs (modern versions)
+  - VulnLookup → minimal exploits (modern versions, few SearchSploit hits)
   - Reasoner → stealth tactics, avoids brute-force (guided by memory warnings)
   - Evaluator → mostly true_negatives (attacks fail as expected)
   - Session log → captures steps for future ETL
@@ -1933,7 +2034,7 @@ npm start recon scanme.nmap.org
 - Expected:
   - RAG Memory → recalls "SMB null session" anti-pattern, suggests guest access first
   - Profiler → "weak", "high-value" risk
-  - VulnLookup → multiple critical CVEs (MS17-010, etc.)
+  - VulnLookup → multiple critical exploits from SearchSploit (MS17-010, EternalBlue, etc.)
   - Reasoner → aggressive tactics, but follows memory suggestions for SMB
   - Evaluator → true_positives (attacks succeed)
   - Session log → captures steps for future ETL
@@ -1979,7 +2080,7 @@ for pair in pairs:
 | Metric | Before Upgrade | After Upgrade |
 |--------|---------------|---------------|
 | Agents | 4 (Reasoner, Executor, MCP, Cleaner) | 7 (+Profiler, VulnLookup, Evaluator) + RAG MCP |
-| Intelligence | None | Profile + CVEs + Anti-Pattern Memory |
+| Intelligence | None | Profile + Exploits (SearchSploit) + Anti-Pattern Memory |
 | Attack Planning | Generic tool calls | Tactical plan with predictions |
 | Learning Loop | None | Evaluation + training data + RAG feedback |
 | Memory | None (stateless) | ChromaDB vector store (persistent cross-session) |
@@ -1998,7 +2099,7 @@ for pair in pairs:
 | Executor | Haiku 3.5 | 10 | 1000 | ~$0.02 |
 | Data Cleaner | Haiku 3.5 | 10 | 1500 | ~$0.03 |
 | Profiler | Haiku 3.5 | 2-3 | 1500 | ~$0.01 |
-| VulnLookup | N/A (API) | 5-10 | N/A | Free |
+| VulnLookup | N/A (SearchSploit MCP) | 5-10 | N/A | Free (local) |
 | RAG Memory MCP | N/A (local) | 10 | N/A | Free |
 | Evaluator | Haiku 3.5 | 5-10 | 1000 | ~$0.02 |
 | **Total (runtime)** | | | | **~$0.53** |
@@ -2007,7 +2108,7 @@ for pair in pairs:
 |---------------|-------|-------------|
 | DeepSeek Transformer | DeepSeek-V3 | ~$0.01-0.05 per session |
 | ChromaDB (local) | N/A | Free |
-| NVD API | N/A | Free (with rate limits) |
+| SearchSploit (local) | N/A | Free (offline, no rate limits) |
 
 ---
 
@@ -2028,7 +2129,7 @@ for pair in pairs:
 
 ✅ **Functional:**
 - Profiler accurately identifies OS and security posture (>80% accuracy)
-- VulnLookup finds relevant CVEs from NVD API
+- VulnLookup finds relevant exploits/CVEs via SearchSploit MCP Server
 - RAG Memory recalls relevant anti-patterns for current scenario (cosine distance < 0.5)
 - Reasoner outputs tactical plans with prediction metrics, informed by memory warnings
 - Evaluator correctly labels outcomes (>85% agreement with human review)
@@ -2037,7 +2138,7 @@ for pair in pairs:
 
 ✅ **Performance:**
 - Intelligence layer adds <5s latency per iteration
-- Parallel execution (Profiler + VulnLookup + RAG recall) ~1.5-2x faster than sequential
+- Parallel execution (Profiler + VulnLookup via SearchSploit + RAG recall) ~1.5-2x faster than sequential
 - RAG recall adds <100ms latency (local ChromaDB query)
 - Evaluation loop adds <2s per attack vector
 
@@ -2053,7 +2154,7 @@ for pair in pairs:
 ## Implementation Priority
 
 1. **Week 1**: Data schemas + Enhanced Data Cleaner
-2. **Week 2**: Profiler + RAG Agent (with APIs)
+2. **Week 2**: Profiler + VulnLookup (SearchSploit MCP integration)
 3. **Week 3**: Reasoner tactical planning upgrade
 4. **Week 4**: Evaluator + Orchestrator integration
 5. **Week 5**: Testing + Training data analysis
@@ -2064,7 +2165,7 @@ for pair in pairs:
 
 This architecture transforms the MVP pentest agent into a production-grade system with:
 
-- **Situational Awareness**: Target profiling and real-time CVE intelligence
+- **Situational Awareness**: Target profiling and exploit intelligence via SearchSploit MCP
 - **Strategic Planning**: Tactical plans with predictive metrics and attack rationale
 - **Continuous Learning**: Automated evaluation loop generating training data for RLHF
 
@@ -2072,6 +2173,6 @@ The closed-loop design ensures every attack becomes a learning opportunity, enab
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2026-02-04
+**Document Version:** 1.2
+**Last Updated:** 2026-02-06
 **Author:** AI Architecture Planning System
