@@ -1,9 +1,10 @@
 # MVP - AI-Powered Penetration Testing Agent
 
-> Last Updated: 2026-02-06
-> Architecture Version: 1.3 (Intelligence Layer + Evaluation Loop + RAG Memory)
+> **Last Updated:** 2026-02-06
+> **Architecture Version:** 1.3+ (Intelligence Layer + Evaluation Loop + RAG Memory Integration)
+> **Latest Feature:** RAG Memory System with Playbooks + Anti-Patterns (2026-02-06)
 
-An AI-powered penetration testing agent using Claude AI with a hierarchical multi-agent architecture, Intelligence Layer for target profiling, Evaluation Loop for continuous improvement, and RAG Memory System for learning from past experiences.
+An AI-powered penetration testing agent using Claude AI with a hierarchical multi-agent architecture, Intelligence Layer for target profiling, Evaluation Loop for continuous improvement, and RAG Memory System that queries security playbooks (successful techniques) and anti-patterns (failed exploits) from past experiences.
 
 ## Architecture
 
@@ -13,33 +14,44 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
 ┌──────────────────────────────────────────────────────────────────┐
 │                        ORCHESTRATOR                              │
 │                    (src/agent/index.ts)                          │
-│            Intelligence Layer + Evaluation Loop                  │
+│     Intelligence Layer + Evaluation Loop + RAG Memory           │
 └──────────────────────────────────────────────────────────────────┘
-         │           │           │           │           │
-         ▼           ▼           ▼           ▼           ▼
-   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
-   │REASONER │ │EXECUTOR │ │  DATA   │ │ SKILLS  │ │EVALUATOR│
-   │(Sonnet4)│ │(Haiku45)│ │ CLEANER │ │ LOADER  │ │(Haiku35)│
-   │Tactical │ │         │ │(Haiku45)│ │+Memory  │ │Labeling │
-   │Planning │ │         │ │Enriched │ │Manager  │ │TP/FP/FN │
-   └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘
-                     │              │                      │
-                     ▼              ▼                      ▼
-              ┌──────────┐   ┌─────────────────────┐  Training
-              │MCP AGENT │   │ INTELLIGENCE LAYER  │  Data
-              └──────────┘   └─────────────────────┘  (JSON)
-                     │              │         │
-                     ▼              ▼         ▼
-          ┌──────────────┐  ┌──────────┐ ┌──────────┐
-          │ MCP SERVERS  │  │ PROFILER │ │  VULN    │
-          ├──────────────┤  │ (Haiku35)│ │ LOOKUP   │
-          │ • Nmap       │  │ Target   │ │SearchSploit
-          │ • SearchSploit│ │ Profile  │ │ (Local)  │
-          │ • RAG Memory │  └──────────┘ └──────────┘
-          └──────────────┘      │              │
-                     │          ▼              ▼
-                     └─> Intelligence Context <─┘
-                         (OS + Tech + CVEs)
+         │           │           │           │           │           │
+         ▼           ▼           ▼           ▼           ▼           ▼
+   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
+   │REASONER │ │EXECUTOR │ │  DATA   │ │ SKILLS  │ │EVALUATOR│ │   RAG   │
+   │(Sonnet4)│ │(Haiku45)│ │ CLEANER │ │ LOADER  │ │(Haiku35)│ │ MEMORY  │
+   │Tactical │ │         │ │(Haiku45)│ │+Memory  │ │Labeling │ │Playbooks│
+   │Planning │ │         │ │Enriched │ │Manager  │ │TP/FP/FN │ │Anti-Patt│
+   └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘
+                     │              │                      │           │
+                     ▼              ▼                      ▼           ▼
+              ┌──────────┐   ┌─────────────────────┐  Training  ┌──────────┐
+              │MCP AGENT │   │ INTELLIGENCE LAYER  │  Data      │ RAG MCP  │
+              └──────────┘   └─────────────────────┘  (JSON)    │  Server  │
+                     │              │         │                  └──────────┘
+                     ▼              ▼         ▼                       │
+          ┌──────────────┐  ┌──────────┐ ┌──────────┐               │
+          │ MCP SERVERS  │  │ PROFILER │ │  VULN    │               │
+          ├──────────────┤  │ (Haiku35)│ │ LOOKUP   │               │
+          │ • Nmap       │  │ Target   │ │SearchSploit               │
+          │ • SearchSploit│ │ Profile  │ │ (Local)  │               │
+          │ • RAG Memory │  └──────────┘ └──────────┘               │
+          └──────────────┘      │              │                     │
+                     │          ▼              ▼                     │
+                     └─> Intelligence Context <─┘                   │
+                         (OS + Tech + CVEs)                         │
+                                  │                                  │
+                                  ▼                                  │
+                         ┌──────────────────┐                       │
+                         │  RAG Memory Query│←──────────────────────┘
+                         │  • Playbooks     │  (Successful Techniques)
+                         │  • Anti-Patterns │  (Failed Exploits)
+                         └──────────────────┘
+                                  │
+                                  ▼
+                         Enhanced Reasoner Context
+                     (Profile + CVEs + Playbooks + Warnings)
 ```
 
 ### Subagents
@@ -52,13 +64,16 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
 | **Data Cleaner**   | Claude Haiku 4.5   | Parses & enriches output (service categorization)      |
 | **Profiler**       | Claude Haiku 3.5   | Target profiling (OS, tech stack, security posture)    |
 | **VulnLookup**     | -                  | Exploit research via SearchSploit MCP (offline)        |
+| **RAG Memory**     | -                  | Retrieves playbooks & anti-patterns from past tests    |
 | **Evaluator**      | Claude Haiku 3.5   | Post-execution evaluation and ground truth labeling    |
 | **Skills Loader**  | -                  | Loads skills + Memory Manager rules                    |
 | **Session Logger** | -                  | JSONL logging for RAG Memory ETL pipeline              |
 
-### Intelligence Layer + Evaluation Loop (Phase 1-7 ✅)
+### Intelligence Layer + Evaluation Loop + RAG Memory (Phase 1-8 ✅)
 
 The Intelligence Layer enriches reconnaissance data with:
+
+
 
 1. **Service Enrichment** (Data Cleaner):
    - Service categorization (web, database, remote-access, etc.)
@@ -78,11 +93,14 @@ The Intelligence Layer enriches reconnaissance data with:
    - PoC availability and local paths
    - Platform-aware filtering
 
-4. **RAG Memory System** (Integration Points):
-   - Session logging in JSONL format
-   - Anti-pattern recall before decisions
-   - Continuous learning from failures
-   - See: [docs/RAG-Memory-Integration.md](docs/RAG-Memory-Integration.md)
+4. **RAG Memory System** (RAG Memory Agent) - **NEW! 2026-02-06**:
+   - Queries `security_playbooks` collection via MCP
+   - **Playbooks** (type: `playbook`): Successful exploitation techniques with working payloads
+   - **Anti-Patterns** (type: `anti_pattern`): Failed exploits with reasons and alternatives
+   - Queries based on discovered services, CVEs, and target profile
+   - Injects historical knowledge into Reasoner's context
+   - Session logging in JSONL format for continuous learning
+   - See: [docs/RAG-Memory-Integration-Guide.md](docs/RAG-Memory-Integration-Guide.md)
 
 ### Decision-Making Architecture: Strategic vs. Tactical
 
