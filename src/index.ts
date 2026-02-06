@@ -233,8 +233,14 @@ function handleRules(agent: PentestAgent, args: string[]): void {
  * 5. Handles graceful shutdown
  *
  * Environment Variables:
- * - NMAP_SERVER_PATH: Path to nmap MCP server (optional)
  * - ANTHROPIC_API_KEY: Claude API key (required)
+ * - NMAP_SERVER_PATH: Path to nmap MCP server (optional)
+ * - SEARCHSPLOIT_SERVER_PATH: Path to SearchSploit MCP server (optional)
+ * - RAG_MEMORY_SERVER_PATH: Path to RAG memory MCP server (optional)
+ * - ENABLE_EVALUATION: Enable evaluation loop and training data collection (optional)
+ * - ENABLE_RAG_MEMORY: Enable RAG memory recall before decisions (optional)
+ * - TRAINING_DATA_PATH: Directory for training data JSON files (optional)
+ * - SESSION_LOGS_PATH: Directory for session JSONL logs (optional)
  *
  * @async
  * @returns {Promise<void>}
@@ -244,6 +250,12 @@ async function main(): Promise<void> {
   const nmapPath =
     process.env.NMAP_SERVER_PATH ||
     path.resolve('../pentest-mcp-server/nmap-server-ts/dist/index.js');
+
+  const searchsploitPath =
+    process.env.SEARCHSPLOIT_SERVER_PATH ||
+    path.resolve('../pentest-mcp-server/searchsploit-server-ts/dist/index.js');
+
+  const ragMemoryPath = process.env.RAG_MEMORY_SERVER_PATH;
 
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicApiKey) {
@@ -259,7 +271,19 @@ async function main(): Promise<void> {
       nmap: {
         path: nmapPath,
       },
+      searchsploit: {
+        path: searchsploitPath,
+      },
+      ...(ragMemoryPath && {
+        rag_memory: {
+          path: ragMemoryPath,
+        },
+      }),
     },
+    enableEvaluation: process.env.ENABLE_EVALUATION === 'true',
+    enableRAGMemory: process.env.ENABLE_RAG_MEMORY === 'true' && !!ragMemoryPath,
+    trainingDataPath: process.env.TRAINING_DATA_PATH || './logs/training_data',
+    sessionLogsPath: process.env.SESSION_LOGS_PATH || './logs/sessions',
   };
 
   // Create and initialize agent
