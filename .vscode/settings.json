@@ -1,0 +1,43 @@
+{
+  // Make .env files visible in VSCode Explorer
+  "files.exclude": {
+    // Override default exclusion for .env files
+    "**/.env": false,
+    "**/.env.*": false,
+
+    // Keep other common exclusions
+    "**/.git": true,
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.yalc": true,
+    "**/__pycache__": true,
+    "**/*.pyc": true
+  },
+
+  // Show .env files in search results
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.git": true,
+    "**/.yalc": true
+  },
+
+  // Syntax highlighting for .env files
+  "files.associations": {
+    "*.env": "dotenv",
+    ".env": "dotenv",
+    ".env.*": "dotenv"
+  },
+
+  // Editor settings for .env files
+  "[dotenv]": {
+    "editor.formatOnSave": false,
+    "editor.insertSpaces": true,
+    "editor.tabSize": 2
+  },
+
+  // Security: Show a warning icon for .env files
+  "workbench.colorCustomizations": {
+    "editorWarning.foreground": "#ffa500"
+  }
+}
