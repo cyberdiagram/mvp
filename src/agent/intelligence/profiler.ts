@@ -9,7 +9,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { DiscoveredService, TargetProfile } from './types.js';
+import { DiscoveredService, TargetProfile } from '../core/types.js';
 
 /** Model used for profiling - Haiku for speed and cost efficiency */
 export const PROFILER_MODEL = 'claude-3-5-haiku-20241022';

@@ -7,7 +7,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { ExecutorPlan, ExecutorStep, ReasonerOutput } from './types.js';
+import { ExecutorPlan, ExecutorStep, ReasonerOutput } from '../core/types.js';
 
 /** Model used for execution planning - Haiku for speed and efficiency */
 export const EXECUTOR_MODEL = 'claude-haiku-4-5-20251001';

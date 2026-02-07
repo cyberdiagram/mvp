@@ -9,7 +9,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { PredictionMetrics, EvaluationResult } from './types.js';
+import { PredictionMetrics, EvaluationResult } from '../core/types.js';
 
 /** Model used for evaluation - Haiku for speed and cost efficiency */
 export const EVALUATOR_MODEL = 'claude-3-5-haiku-20241022';

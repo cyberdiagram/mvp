@@ -12,8 +12,8 @@
  * - Severity inference from exploit type and platform
  */
 
-import { DiscoveredService, TargetProfile, VulnerabilityInfo } from './types.js';
-import { MCPAgent } from './mcp-agent.js';
+import { DiscoveredService, TargetProfile, VulnerabilityInfo } from '../core/types.js';
+import { MCPAgent } from '../execution/mcp-agent.js';
 
 /**
  * SearchSploit search result from MCP server.

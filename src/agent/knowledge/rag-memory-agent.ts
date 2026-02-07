@@ -11,7 +11,7 @@
  * @module agent/definitions/rag-memory-agent
  */
 
-import { MCPAgent } from './mcp-agent.js';
+import { MCPAgent } from '../execution/mcp-agent.js';
 
 /**
  * Playbook/Anti-Pattern document from RAG memory
@@ -192,44 +192,56 @@ export class RAGMemoryAgent {
   /**
    * Parse MCP tool output into RAG documents.
    *
-   * @param output - Raw MCP output
-   * @param type - Document type filter
+   * The RAG Memory client returns a RecallResult with matches and assembled_prompt.
+   * We need to extract the patterns and convert them to RAGMemoryDocuments.
+   *
+   * @param output - Raw MCP output (JSON string)
+   * @param type - Document type filter (not used with new recall API)
    * @returns Parsed documents
    */
   private parseRAGOutput(output: string, type: 'playbook' | 'anti_pattern'): RAGMemoryDocument[] {
     try {
-      // Try to parse as JSON array
-      const parsed = JSON.parse(output);
+      // Parse the RecallResult from the MCP client
+      const recallResult = JSON.parse(output);
 
-      if (Array.isArray(parsed)) {
-        return parsed.filter((doc: RAGMemoryDocument) => doc.metadata?.type === type);
+      if (recallResult.success && recallResult.patterns && Array.isArray(recallResult.patterns)) {
+        // Convert RAGPattern[] to RAGMemoryDocument[]
+        return recallResult.patterns.map((pattern: any) => ({
+          id: pattern.id || `${type}_${Date.now()}`,
+          document: pattern.prompt_text || pattern.document || '',
+          metadata: {
+            type,
+            service: 'unknown',
+            category: 'general',
+            tags: pattern.trigger_keywords || '',
+          },
+        }));
       }
 
-      // If output is already formatted text, wrap it
-      return [
-        {
-          id: `${type}_${Date.now()}`,
-          document: output,
-          metadata: {
-            type,
-            service: 'unknown',
-            category: 'general',
+      // If no patterns found, return empty array
+      if (recallResult.success && recallResult.matches === 0) {
+        return [];
+      }
+
+      // Fallback: wrap the assembled prompt if available
+      if (recallResult.assembled_prompt) {
+        return [
+          {
+            id: `${type}_${Date.now()}`,
+            document: recallResult.assembled_prompt,
+            metadata: {
+              type,
+              service: 'unknown',
+              category: 'general',
+            },
           },
-        },
-      ];
-    } catch {
-      // If parsing fails, treat as plain text
-      return [
-        {
-          id: `${type}_${Date.now()}`,
-          document: output,
-          metadata: {
-            type,
-            service: 'unknown',
-            category: 'general',
-          },
-        },
-      ];
+        ];
+      }
+
+      return [];
+    } catch (error) {
+      console.error('[RAG Memory] Failed to parse output:', error);
+      return [];
     }
   }
 

@@ -1,11 +1,4 @@
-// Export all subagent definitions
+// Export evaluator (kept in definitions until Phase 6)
+// Other agents have been moved to layered architecture
 
-export * from './types.js';
-export * from './reasoner.js';
-export * from './executor.js';
-export * from './mcp-agent.js';
-export * from './data-cleaner.js';
-export * from './profiler.js';
-export * from './vuln-lookup.js';
 export * from './evaluator.js';
-export * from './rag-memory-agent.js';

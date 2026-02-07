@@ -23,3 +23,7 @@ yalc.lock
 
 # Claude Code
 .claude/
+
+# AI Assistant Project Instructions
+CLAUDE.md
+GEMINI.md

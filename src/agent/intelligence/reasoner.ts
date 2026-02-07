@@ -7,7 +7,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { ReasonerOutput, IntelligenceContext, TacticalPlanObject } from './types.js';
+import { ReasonerOutput, IntelligenceContext, TacticalPlanObject } from '../core/types.js';
 
 /** Model used for strategic reasoning - Sonnet for best decision quality */
 export const REASONER_MODEL = 'claude-sonnet-4-20250514';
