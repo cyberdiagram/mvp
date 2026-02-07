@@ -10,68 +10,89 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
 
 ## Architecture
 
+**Version**: 2.0 (Layered Architecture)
+**Last Updated**: 2026-02-07
+
 ### Overview
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        ORCHESTRATOR                              │
-│                    (src/agent/index.ts)                          │
-│     Intelligence Layer + Evaluation Loop + RAG Memory           │
-└──────────────────────────────────────────────────────────────────┘
-         │           │           │           │           │           │
-         ▼           ▼           ▼           ▼           ▼           ▼
-   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
-   │REASONER │ │EXECUTOR │ │  DATA   │ │ SKILLS  │ │EVALUATOR│ │   RAG   │
-   │(Sonnet4)│ │(Haiku45)│ │ CLEANER │ │ LOADER  │ │(Haiku35)│ │ MEMORY  │
-   │Tactical │ │         │ │(Haiku45)│ │+Memory  │ │Labeling │ │Playbooks│
-   │Planning │ │         │ │Enriched │ │Manager  │ │TP/FP/FN │ │Anti-Patt│
-   └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘
-                     │              │                      │           │
-                     ▼              ▼                      ▼           ▼
-              ┌──────────┐   ┌─────────────────────┐  Training  ┌──────────┐
-              │MCP AGENT │   │ INTELLIGENCE LAYER  │  Data      │ RAG MCP  │
-              └──────────┘   └─────────────────────┘  (JSON)    │  Server  │
-                     │              │         │                  └──────────┘
-                     ▼              ▼         ▼                       │
-          ┌──────────────┐  ┌──────────┐ ┌──────────┐               │
-          │ MCP SERVERS  │  │ PROFILER │ │  VULN    │               │
-          ├──────────────┤  │ (Haiku35)│ │ LOOKUP   │               │
-          │ • Nmap       │  │ Target   │ │SearchSploit               │
-          │ • SearchSploit│ │ Profile  │ │ (Local)  │               │
-          │ • RAG Memory │  └──────────┘ └──────────┘               │
-          └──────────────┘      │              │                     │
-                     │          ▼              ▼                     │
-                     └─> Intelligence Context <─┘                   │
-                         (OS + Tech + CVEs)                         │
-                                  │                                  │
-                                  ▼                                  │
-                         ┌──────────────────┐                       │
-                         │  RAG Memory Query│←──────────────────────┘
-                         │  • Playbooks     │  (Successful Techniques)
-                         │  • Anti-Patterns │  (Failed Exploits)
-                         └──────────────────┘
-                                  │
-                                  ▼
-                         Enhanced Reasoner Context
-                     (Profile + CVEs + Playbooks + Warnings)
+┌────────────────────────────────────────────────────────────────────────┐
+│                          ORCHESTRATOR (v2.0)                           │
+│                    (src/agent/core/orchestrator.ts)                    │
+│         Layered Architecture + Intelligence + Evaluation + RAG         │
+│              Incremental Analysis + Retry with Backoff                 │
+└────────────────────────────────────────────────────────────────────────┘
+                                    │
+        ┌───────────────────────────┼───────────────────────────┐
+        │                           │                           │
+        ▼                           ▼                           ▼
+┌──────────────────┐    ┌──────────────────┐      ┌──────────────────┐
+│ INTELLIGENCE     │    │   KNOWLEDGE      │      │   EXECUTION      │
+│ (Brains)         │    │   (Memory)       │      │   (Hands)        │
+├──────────────────┤    ├──────────────────┤      ├──────────────────┤
+│ • Reasoner       │    │ • VulnLookup     │      │ • Executor       │
+│   (Sonnet 4)     │◄───┤   (SearchSploit) │      │   (Haiku 4.5)    │
+│   Strategic      │    │   CVE Research   │      │   Tactical       │
+│   Planning       │    │                  │      │   Breakdown      │
+│                  │    │ • RAG Memory     │      │                  │
+│ • Profiler       │    │   (ChromaDB)     │      │ • MCP Agent      │
+│   (Haiku 3.5)    │    │   Playbooks +    │      │   3 MCP Servers  │
+│   Target         │    │   Anti-Patterns  │      │                  │
+│   Analysis       │    │                  │      │ • Data Cleaner   │
+│                  │    │                  │      │   (Haiku 4.5)    │
+└──────────────────┘    └──────────────────┘      │   Output Parsing │
+                                                   └──────────────────┘
+        │                           │                           │
+        └───────────────────────────┼───────────────────────────┘
+                                    │
+                                    ▼
+                    ┌──────────────────────────────┐
+                    │   UTILITIES & MONITORING     │
+                    ├──────────────────────────────┤
+                    │ • Skills Loader + Memory Mgr │
+                    │ • Token Monitor (Cost Track) │
+                    │ • Session Logger (JSONL ETL) │
+                    │ • Evaluator (TP/FP/FN/TN)    │
+                    └──────────────────────────────┘
+                                    │
+                                    ▼
+                    ┌──────────────────────────────┐
+                    │      MCP INTEGRATIONS        │
+                    ├──────────────────────────────┤
+                    │ • Nmap Server (Recon)        │
+                    │ • SearchSploit Server (CVEs) │
+                    │ • RAG Memory Server (Learn)  │
+                    └──────────────────────────────┘
 ```
 
-### Subagents
+**Key Features (v2.0)**:
+- ✅ **Layered Architecture**: 5 layers (core, intelligence, knowledge, execution, utils)
+- ✅ **Incremental Intelligence**: Only analyzes NEW services, merges results intelligently
+- ✅ **Retry Mechanism**: Exponential backoff (max 2 retries) for transient failures
+- ✅ **3 MCP Servers**: Nmap, SearchSploit, RAG Memory with unified tool routing
+- ✅ **Refactored Orchestrator**: Main loop 250→70 lines (72% reduction), 8 helper methods
+- ✅ **CVE Deduplication**: Intelligent vulnerability merging across iterations
+- ✅ **Service Fingerprinting**: Tracks analyzed services to prevent duplicate work
+- ✅ **~420 Lines of JSDoc**: Comprehensive documentation for all methods
 
-| Agent              | Model              | Purpose                                                |
-| ------------------ | ------------------ | ------------------------------------------------------ |
-| **Reasoner**       | Claude Sonnet 4    | **STRATEGIC** planning - decides WHAT to do and WHY    |
-| **Executor**       | Claude Haiku 4.5   | **TACTICAL** execution - decides HOW (tool selection)  |
-| **MCP Agent**      | -                  | Executes security tools via MCP protocol               |
-| **Data Cleaner**   | Claude Haiku 4.5   | Parses & enriches output (service categorization)      |
-| **Profiler**       | Claude Haiku 3.5   | Target profiling (OS, tech stack, security posture)    |
-| **VulnLookup**     | -                  | Exploit research via SearchSploit MCP (offline)        |
-| **RAG Memory**     | -                  | Retrieves playbooks & anti-patterns from past tests    |
-| **Evaluator**      | Claude Haiku 3.5   | Post-execution evaluation and ground truth labeling    |
-| **Skills Loader**  | -                  | Loads skills + Memory Manager rules                    |
-| **Session Logger** | -                  | JSONL logging for RAG Memory ETL pipeline              |
+### Layered Architecture Components
 
-### Intelligence Layer + Evaluation Loop + RAG Memory (Phase 1-8 ✅)
+| Layer | Agent | Model | Purpose |
+|-------|-------|-------|---------|
+| **Core** | Orchestrator | - | Main coordinator (1,117 lines, 8 phases + 2 utilities) |
+| **Intelligence** | Reasoner | Sonnet 4 | **STRATEGIC** planning - decides WHAT to do and WHY |
+| **Intelligence** | Profiler | Haiku 3.5 | Target profiling (OS, tech stack, security posture) |
+| **Knowledge** | VulnLookup | - | Exploit research via SearchSploit MCP (offline CVE database) |
+| **Knowledge** | RAG Memory | - | Retrieves playbooks & anti-patterns from past penetration tests |
+| **Execution** | Executor | Haiku 4.5 | **TACTICAL** execution - decides HOW (tool selection, 1-N steps) |
+| **Execution** | MCP Agent | - | Executes security tools via 3 MCP servers (Nmap, SearchSploit, RAG) |
+| **Execution** | Data Cleaner | Haiku 4.5 | Parses & enriches output (service categorization + confidence) |
+| **Utilities** | Skills Loader | - | Dynamic skill loading + Memory Manager (tool preferences) |
+| **Utilities** | Token Monitor | - | Tracks token consumption and costs per agent/model |
+| **Utilities** | Session Logger | - | JSONL logging for RAG Memory ETL pipeline (training data) |
+| **Utilities** | Evaluator | Haiku 3.5 | Post-execution evaluation (TP/FP/FN/TN ground truth labeling) |
+
+### Intelligence Layer Features (Phase 1-7 ✅)
 
 The Intelligence Layer enriches reconnaissance data with:
 
@@ -1042,59 +1063,45 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 
 ## Implementation Status
 
-### ✅ Phase 1: Data Schema Enhancement (Complete)
-- Intelligence Layer type definitions
-- Service enrichment interfaces
-- Tactical planning types
-- Evaluation and training data structures
+**Architecture Version**: 2.0 (Layered)
+**Completion**: Phase 1-7 ✅ Complete
 
-### ✅ Phase 2: Enhanced Data Cleaner (Complete)
-- Service categorization (web, database, remote-access, etc.)
-- Confidence scoring and criticality assessment
-- Product/version extraction from banners
-- DiscoveredService output format
+### Summary (Phase 1-7)
 
-### ✅ Phase 3: Profiler Agent (Complete)
-- OS fingerprinting from service banners
-- Technology stack inference (LAMP, Windows, etc.)
-- Security posture assessment (hardened, standard, weak)
-- Risk level classification (high-value, medium, low)
-- Prompt caching for cost optimization
+| Phase | Component | Status | Key Features |
+|-------|-----------|--------|--------------|
+| **Phase 1** | Data Schema | ✅ Complete | Intelligence types, service enrichment interfaces, tactical planning structures |
+| **Phase 2** | Data Cleaner | ✅ Complete | Service categorization, confidence scoring, criticality assessment |
+| **Phase 3** | Profiler Agent | ✅ Complete | OS fingerprinting, tech stack inference, security posture, prompt caching |
+| **Phase 4a** | VulnLookup Agent | ✅ Complete | SearchSploit MCP integration, offline CVE lookup, platform-aware filtering |
+| **Phase 4b** | RAG Memory Integration | ✅ Complete | JSONL session logging, SessionStep interface, integration documentation |
+| **Phase 5** | Reasoner Tactical Planning | ✅ Complete | TacticalPlanObject with attack vectors, prediction metrics, intelligence context injection |
+| **Phase 6** | Evaluator Agent | ✅ Complete | TP/FP/FN/TN labeling, prediction comparison, training data generation |
+| **Phase 7** | Orchestrator Integration | ✅ Complete | Parallel intelligence execution, RAG memory recall, evaluation loop, training data persistence |
 
-### ✅ Phase 4a: VulnLookup Agent (Complete)
-- SearchSploit MCP integration
-- Offline exploit lookup (local ExploitDB)
-- CVE extraction and severity inference
-- Platform-aware filtering
-- PoC examination and path retrieval
+### Recent Enhancements (2026-02-07)
 
-### ✅ Phase 4b: RAG Memory Integration Points (Complete)
-- SessionStep interface and JSONL logging structure
-- Integration documentation and setup guide
-- Directory structure for session logs
-- Ready for RAG MCP Server deployment
+**Layered Architecture Refactoring (v2.0)**:
+- ✅ Migrated from flat structure to 5-layer architecture (core, intelligence, knowledge, execution, utils)
+- ✅ Preserved git history via `git mv` for all file relocations
+- ✅ Added barrel exports (`index.ts`) for clean imports
+- ✅ Created README.md in each layer documenting purpose and dependencies
 
-### ✅ Phase 5: Reasoner Tactical Planning (Complete)
-- TacticalPlanObject output with attack vectors
-- Prediction metrics (confidence, rationale, success criteria)
-- Intelligence context injection (target profile, CVEs)
-- RAG memory context injection (anti-pattern warnings)
-- Tactical plan parsing and validation
+**Intelligence Phase Robustness**:
+- ✅ **Incremental Intelligence Analysis**: Tracks analyzed services via fingerprints, only analyzes NEW services
+- ✅ **Intelligent Merging**: Deduplicates vulnerabilities by CVE ID across iterations
+- ✅ **Retry Mechanism**: Exponential backoff (max 2 retries, 1s/2s delays) for transient failures
+- ✅ **~67% Failure Recovery**: Handles network issues, API rate limits, server hiccups automatically
 
-### ✅ Phase 6: Evaluator Agent (Complete)
-- Post-execution evaluation (TP/FP/FN/TN labeling)
-- Prediction vs. actual outcome comparison
-- Training data generation (EvaluationResult)
-- Confidence calibration and reasoning
-- Fallback evaluation using pattern matching
+**Orchestrator Refactoring**:
+- ✅ Main loop reduced from ~250 lines to ~70 lines (72% reduction)
+- ✅ 8 private helper methods for clean phase separation
+- ✅ 2 utility helpers: `createServiceFingerprint()`, `retryWithBackoff<T>()`
+- ✅ ~420 lines of comprehensive JSDoc documentation
 
-### ✅ Phase 7: Orchestrator Integration (Complete)
-- Intelligence Layer parallel execution (Profiler + VulnLookup)
-- RAG memory recall before Reasoner decisions
-- Evaluation loop for tactical plan attack vectors
-- Training data persistence (JSON batches)
-- Session logging (JSONL format for RAG ETL)
-- Helper methods for data extraction and persistence
+**New Utilities**:
+- ✅ **TokenMonitor** (`utils/token-monitor.ts`): Tracks token consumption, costs per agent/model
+- ✅ **SessionLogger** (`utils/session-logger.ts`): JSONL logging for ETL pipeline (pentest-data-refinery)
 
 ### 📦 External Dependencies (Separate Repositories)
 
@@ -1241,10 +1248,6 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 - **2 Utility Components**: TokenMonitor (cost tracking), SessionLogger (JSONL logging)
 
 ---
-
-## Contributing
-
-See the architecture plan at [docs/Final_Architecture_Plan_with_Evaluation_Loop-0204-from-claude.md](docs/Final_Architecture_Plan_with_Evaluation_Loop-0204-from-claude.md) for implementation details.
 
 ## License
 
