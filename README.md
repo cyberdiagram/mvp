@@ -1,5 +1,7 @@
 # MVP - AI-Powered Penetration Testing Agent
 
+![Visitors](https://api.visitorbadge.io/api/visitors?path=flashoop/mvp&label=VISITORS&countColor=%23263238)
+
 > **Last Updated:** 2026-02-06
 > **Architecture Version:** 1.3+ (Intelligence Layer + Evaluation Loop + RAG Memory Integration)
 > **Latest Feature:** RAG Memory System with Playbooks + Anti-Patterns (2026-02-06)
