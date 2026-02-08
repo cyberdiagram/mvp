@@ -3,14 +3,14 @@
 ![Visitors](https://api.visitorbadge.io/api/visitors?path=flashoop/mvp&label=VISITORS&countColor=%23263238)
 
 > **Last Updated:** 2026-02-08
-> **Architecture Version:** 2.1 (Agent Loop Hardening)
-> **Latest Feature:** Executor Tool Whitelist, Failure Feedback Loop, Service Deduplication, Fingerprint Parsing Skills (2026-02-08)
+> **Architecture Version:** 2.2 (Observability & Safety Hardening)
+> **Latest Feature:** Langfuse Tracing, Duplicate Operation Detection, Database Exhaustion Detection, Dynamic Tool Whitelist, RAG Memory Refactoring, OS Detection (2026-02-08)
 
 An AI-powered penetration testing agent using Claude AI with a hierarchical multi-agent architecture, Intelligence Layer for target profiling, Evaluation Loop for continuous improvement, and RAG Memory System that queries security playbooks (successful techniques) and anti-patterns (failed exploits) from past experiences.
 
 ## Architecture
 
-**Version**: 2.1 (Agent Loop Hardening)
+**Version**: 2.2 (Observability & Safety Hardening)
 **Last Updated**: 2026-02-08
 
 ### Overview
@@ -65,17 +65,18 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
                     └──────────────────────────────┘
 ```
 
-**Key Features (v2.1)**:
+**Key Features (v2.2)**:
 - ✅ **Layered Architecture**: 5 layers (core, intelligence, knowledge, execution, utils)
+- ✅ **Langfuse Observability**: OpenTelemetry-based tracing for all reconnaissance phases via Langfuse
+- ✅ **Duplicate Operation Detection**: Tracks command signatures to prevent repeated identical tool calls with `[SYSTEM INTERVENTION - LOOP DETECTED]` warnings
+- ✅ **Database Exhaustion Detection**: Detects when all queries return empty results and injects `[SYSTEM ADVICE - DATABASE EXHAUSTION]` to redirect the Reasoner
+- ✅ **Dynamic Tool Whitelist**: `ALLOWED_TOOLS` loaded from `src/config/allowed_tools.json` (single source of truth) with tactical plan + LLM validation
+- ✅ **RAG Memory Refactoring**: Two semantically distinct interfaces — `recallInternalWarnings` (Phase 0) and `searchHandbook` (Phase 4b) — replacing raw MCP calls
+- ✅ **OS Detection**: `nmap_os_detection` tool added across server, client SDK, and agent layers
 - ✅ **Incremental Intelligence**: Only analyzes NEW services, merges results intelligently
 - ✅ **Retry Mechanism**: Exponential backoff (max 2 retries) for transient failures
 - ✅ **3 MCP Servers**: Nmap, SearchSploit, RAG Memory with unified tool routing
-- ✅ **Refactored Orchestrator**: Main loop 250→70 lines (72% reduction), 8 helper methods
-- ✅ **CVE Deduplication**: Intelligent vulnerability merging across iterations
-- ✅ **Service Fingerprinting**: Tracks analyzed services to prevent duplicate work
-- ✅ **~420 Lines of JSDoc**: Comprehensive documentation for all methods
 - ✅ **Tactical Plan Passthrough**: Executor uses Reasoner's tactical plan directly, bypassing LLM re-planning
-- ✅ **Tool Whitelist Enforcement**: `ALLOWED_TOOLS` Set + post-LLM validation prevents hallucinated tools
 - ✅ **Explicit Failure Feedback**: Failed tool executions are reported to Reasoner with actionable context
 - ✅ **Service Deduplication**: `host:port` dedup in execution loop prevents context bloat
 - ✅ **Fingerprint Parsing Skills**: Dynamic skill injection into DataCleaner for technology identification
@@ -185,8 +186,10 @@ The project has been refactored from a flat structure to a layered architecture 
 ```
 src/
 ├── index.ts                        # Interactive entry point
+├── instrumentation.ts              # Langfuse/OpenTelemetry tracing setup
 ├── config/
 │   ├── agent-config.ts            # Environment configuration
+│   ├── allowed_tools.json          # Tool whitelist (single source of truth)
 │   └── agent_rules.json            # Memory Manager rules (persistent)
 ├── skills/
 │   ├── nmap_skill.md               # Nmap reconnaissance skill
@@ -294,6 +297,11 @@ export TRAINING_DATA_PATH="./logs/training_data"  # Training pairs storage
 export ENABLE_RAG_MEMORY="true"             # Enable RAG memory recall
 export DEEPSEEK_API_KEY="sk-xxx"            # For ETL transformation
 export CHROMADB_PATH="./data/chromadb"      # Vector database location
+
+# Langfuse Observability (optional)
+export LANGFUSE_SECRET_KEY="sk-lf-xxx"      # Langfuse secret key
+export LANGFUSE_PUBLIC_KEY="pk-lf-xxx"      # Langfuse public key
+export LANGFUSE_BASE_URL="https://cloud.langfuse.com"  # Langfuse endpoint (default)
 ```
 
 ## Usage
@@ -896,6 +904,46 @@ const transport = new SSEClientTransport(new URL('https://your-mcp-server.com/ss
 
 ## Changelog
 
+### 2026-02-08 - Observability & Safety Hardening (v2.2)
+
+**Langfuse Observability Tracing:**
+- **✅ OpenTelemetry Integration**: `src/instrumentation.ts` initializes `NodeSDK` with `LangfuseSpanProcessor`, conditional on `LANGFUSE_SECRET_KEY` and `LANGFUSE_PUBLIC_KEY` environment variables
+- **✅ Reconnaissance Tracing**: `reconnaissance()` wrapped in `startActiveObservation` with nested spans per iteration and phase (Phase 0–4)
+- **✅ Graceful Shutdown**: `shutdownTracing()` flushes all pending spans to Langfuse before process exit
+- **✅ Session Metadata**: Traces include `sessionId`, target IP, and phase-specific input/output metadata
+
+**Duplicate Operation Detection:**
+- **✅ Command Signature Tracking**: `executionHistory: Map<string, number>` tracks tool+args combinations across iterations
+- **✅ Loop Intervention**: When repeated commands detected, injects `[SYSTEM INTERVENTION - LOOP DETECTED]` warning with 4-step behavioral instructions into Reasoner context
+- **✅ Generic Behavioral Pattern**: Warnings are tool-agnostic, focusing on strategic redirection rather than hard-coded rules
+
+**Database Exhaustion Detection:**
+- **✅ Negative Keyword Analysis**: Detects when all tool results contain failure indicators (`no results`, `not found`, `0 matches`, etc.)
+- **✅ Advisory Injection**: `[SYSTEM ADVICE - DATABASE EXHAUSTION]` warning redirects Reasoner to broader search strategies or mission completion
+
+**Dynamic Tool Whitelist:**
+- **✅ JSON Configuration**: `src/config/allowed_tools.json` as single source of truth for 8 allowed MCP tools
+- **✅ Dynamic Loading**: `loadAllowedTools()` with multi-path resolution (works from both `src/` and `dist/`)
+- **✅ System Prompt Generation**: `TOOL_DESCRIPTIONS` map + `buildToolListing()` dynamically generates Executor's tool section
+- **✅ Tactical Plan Validation**: Both LLM-generated and Reasoner tactical plan steps validated against whitelist
+
+**RAG Memory Agent Refactoring:**
+- **✅ `recallInternalWarnings()`**: Phase 0 method querying `anti_patterns` collection, returns formatted `[WARNING N]` text
+- **✅ `searchHandbook()`**: Phase 4b method querying `playbooks` collection with `session_playbook` vs industry categorization
+- **✅ Metadata Preservation**: `parseRAGOutput()` preserves server metadata (type, service, category, tags, source, cve)
+- **✅ Parameter Fix**: `top_k` → `n_results` for `rag_query_playbooks` (was silently returning default 3 results)
+
+**OS Detection (nmap_os_detection):**
+- **✅ Server**: Added `OSDetectionSchema`, tool definition, and handler (`nmap -Pn -O --osscan-guess`) to `nmap-server-ts`
+- **✅ Client SDK**: Added `osDetection(target, ports?)` method to `nmap-client-ts`
+- **✅ Agent**: Added `case 'nmap_os_detection'` routing in `mcp-agent.ts`
+
+**MCP Agent Cleanup:**
+- **✅ `rag_recall`**: `recall()` → `recallMyExperience()` (SDK primary method name)
+- **✅ `rag_query_playbooks`**: Removed `(this.ragMemoryClient as any).callTool(...)` hack → `searchSecurityHandbook(query, nResults)`
+
+---
+
 ### 2026-02-08 - Agent Loop Hardening & Fingerprint Parsing Skills (v2.1)
 
 **Executor-Reasoner Feedback Fixes:**
@@ -1096,8 +1144,8 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 
 ## Implementation Status
 
-**Architecture Version**: 2.1 (Agent Loop Hardening)
-**Completion**: Phase 1-7 ✅ Complete + Agent Loop Hardening ✅
+**Architecture Version**: 2.2 (Observability & Safety Hardening)
+**Completion**: Phase 1-7 ✅ Complete + Agent Loop Hardening ✅ + Observability & Safety ✅
 
 ### Summary (Phase 1-7)
 
@@ -1113,6 +1161,15 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 | **Phase 7** | Orchestrator Integration | ✅ Complete | Parallel intelligence execution, RAG memory recall, evaluation loop, training data persistence |
 
 ### Recent Enhancements (2026-02-08)
+
+**Observability & Safety Hardening (v2.2)**:
+- ✅ **Langfuse Tracing**: OpenTelemetry + Langfuse span processor for full reconnaissance observability
+- ✅ **Duplicate Operation Detection**: Command signature tracking with generic behavioral loop intervention
+- ✅ **Database Exhaustion Detection**: Negative keyword analysis with advisory injection for empty results
+- ✅ **Dynamic Tool Whitelist**: JSON config as single source of truth, tactical plan + LLM validation
+- ✅ **RAG Memory Refactoring**: `recallInternalWarnings` (Phase 0) + `searchHandbook` (Phase 4b) replacing raw MCP calls
+- ✅ **OS Detection**: `nmap_os_detection` across server, client SDK, and agent
+- ✅ **Parameter Fix**: `top_k` → `n_results` for `rag_query_playbooks`
 
 **Agent Loop Hardening (v2.1)**:
 - ✅ **Tactical Plan Passthrough**: Executor uses Reasoner's tactical plan directly, bypassing redundant LLM call
@@ -1240,10 +1297,11 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 | `src/agent/definitions/evaluator.ts` | 241 | EvaluatorAgent (Haiku 3.5) - Outcome labeling (TP/FP/FN/TN) |
 | `src/agent/definitions/index.ts` | 4 | Barrel export |
 
-**Entry Points** (398 lines):
+**Entry Points & Infrastructure** (442 lines):
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/index.ts` | 392 | Interactive CLI with REPL and Memory Manager commands |
+| `src/index.ts` | 397 | Interactive CLI with REPL and Memory Manager commands |
+| `src/instrumentation.ts` | 43 | Langfuse/OpenTelemetry tracing setup (conditional on env vars) |
 | `src/agent/index.ts` | 6 | Main agent barrel export |
 
 #### Layer Documentation (236 lines)
@@ -1268,11 +1326,12 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 | `README.md` | 1,061 | Project overview, architecture, and usage guide |
 | `CLAUDE.md` | 193 | Claude Code project instructions |
 
-#### Configuration (62 lines)
+#### Configuration (77 lines)
 | File | Lines | Purpose |
 |------|-------|---------|
-| `package.json` | 35 | NPM dependencies and scripts |
+| `package.json` | 38 | NPM dependencies and scripts |
 | `tsconfig.json` | 19 | TypeScript compiler configuration |
+| `src/config/allowed_tools.json` | 14 | Tool whitelist (single source of truth for 8 MCP tools) |
 | `.prettierrc` | 8 | Code formatting rules |
 
 ---

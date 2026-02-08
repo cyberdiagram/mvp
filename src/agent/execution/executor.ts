@@ -8,6 +8,8 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { ExecutorPlan, ExecutorStep, ReasonerOutput } from '../core/types.js';
+import * as fs from 'fs';
+import * as path from 'path';
 
 /** Model used for execution planning - Haiku for speed and efficiency */
 export const EXECUTOR_MODEL = 'claude-haiku-4-5-20251001';
@@ -16,29 +18,82 @@ export const EXECUTOR_MODEL = 'claude-haiku-4-5-20251001';
 export const EXECUTOR_MAX_TOKENS = 1000;
 
 /**
- * System prompt that defines the Executor's role and behavior.
+ * Path to the canonical tool whitelist JSON.
+ * Synced from pentest-mcp-server/tools_whitelist.json.
  *
- * Instructs the model to:
- * - Break down high-level strategic actions into atomic tool calls
- * - Keep steps simple (one tool per step)
- * - Ensure proper sequencing (discovery before scan, etc.)
- * - Return structured JSON with steps array
+ * Uses multiple candidate paths so it works from both src/ (ts-node)
+ * and dist/ (compiled) without needing a copy step in the build.
  */
+const WHITELIST_CANDIDATES = [
+  path.resolve(__dirname, '../../config/allowed_tools.json'),         // from dist/agent/execution/
+  path.resolve(__dirname, '../../../src/config/allowed_tools.json'),   // from dist/agent/execution/ → src/
+  path.join(process.cwd(), 'src/config/allowed_tools.json'),          // from project root
+];
+const WHITELIST_PATH = WHITELIST_CANDIDATES.find((p) => fs.existsSync(p)) || WHITELIST_CANDIDATES[0];
+
+/**
+ * Loads the allowed tools list from the JSON configuration file.
+ * Falls back to a hardcoded default if the file is missing or malformed.
+ */
+function loadAllowedTools(): Set<string> {
+  try {
+    const data = fs.readFileSync(WHITELIST_PATH, 'utf-8');
+    const config = JSON.parse(data);
+    if (Array.isArray(config.tools) && config.tools.length > 0) {
+      console.log(`[Executor] Loaded ${config.tools.length} tools from whitelist (v${config.version || '?'})`);
+      return new Set(config.tools);
+    }
+    throw new Error('tools array is empty or missing');
+  } catch (error) {
+    console.error(`[Executor] Failed to load tool whitelist from ${WHITELIST_PATH}. Using hardcoded defaults.`);
+    return new Set([
+      'nmap_host_discovery',
+      'nmap_port_scan',
+      'nmap_service_detection',
+      'nmap_os_detection',
+      'searchsploit_search',
+      'searchsploit_examine',
+      'rag_recall',
+      'rag_query_playbooks',
+    ]);
+  }
+}
+
 /**
  * Canonical list of tools the Executor is allowed to use.
- * Any tool not in this list will be filtered out after LLM planning.
+ * Loaded from src/config/allowed_tools.json at startup.
+ * Any tool not in this set will be filtered out after LLM planning.
  */
-export const ALLOWED_TOOLS = new Set([
-  'nmap_host_discovery',
-  'nmap_port_scan',
-  'nmap_service_detection',
-  'nmap_os_detection',
-  'searchsploit_search',
-  'searchsploit_examine',
-  'searchsploit_update',
-  'rag_recall',
-  'rag_store',
-]);
+export const ALLOWED_TOOLS = loadAllowedTools();
+
+/** Tool descriptions for the system prompt, keyed by tool name */
+const TOOL_DESCRIPTIONS: Record<string, string> = {
+  nmap_host_discovery: '**nmap_host_discovery**: Discover live hosts on a network\n  Arguments: { "target": "IP or CIDR" }',
+  nmap_port_scan: '**nmap_port_scan**: Scan ports on target(s)\n  Arguments: { "target": "IP", "ports": "1-1000" or "top-1000", "scanType": "tcp" or "udp" }',
+  nmap_service_detection: '**nmap_service_detection**: Detect services and versions\n  Arguments: { "target": "IP", "ports": "22,80,443" }',
+  nmap_os_detection: '**nmap_os_detection**: Detect operating system\n  Arguments: { "target": "IP" }',
+  searchsploit_search: '**searchsploit_search**: Search ExploitDB for vulnerabilities\n  Arguments: { "query": "search term" }',
+  searchsploit_examine: '**searchsploit_examine**: Examine a specific exploit\n  Arguments: { "id": "exploit-id" }',
+  rag_recall: '**rag_recall**: Recall security playbooks and anti-patterns\n  Arguments: { "query": "search query" }',
+  rag_query_playbooks: '**rag_query_playbooks**: Search security handbook for attack strategies\n  Arguments: { "query": "search query", "n_results": 5 }',
+};
+
+/**
+ * Builds the tool listing section for the system prompt from ALLOWED_TOOLS.
+ * Only tools present in both ALLOWED_TOOLS and TOOL_DESCRIPTIONS are listed.
+ */
+function buildToolListing(): string {
+  const lines: string[] = [];
+  for (const tool of ALLOWED_TOOLS) {
+    const desc = TOOL_DESCRIPTIONS[tool];
+    if (desc) {
+      lines.push(`- ${desc}`);
+    } else {
+      lines.push(`- **${tool}**: (no description available)`);
+    }
+  }
+  return lines.join('\n');
+}
 
 export const EXECUTOR_SYSTEM_PROMPT = `You are a tactical workflow executor for penetration testing operations.
 
@@ -50,27 +105,7 @@ Your role is to:
 
 # Available Tools (EXHAUSTIVE LIST — you MUST only use tools from this list)
 
-## Nmap Tools
-- **nmap_host_discovery**: Discover live hosts on a network
-  Arguments: { "target": "IP or CIDR" }
-- **nmap_port_scan**: Scan ports on target(s)
-  Arguments: { "target": "IP", "ports": "1-1000" or "top-1000", "scanType": "tcp" or "udp" }
-- **nmap_service_detection**: Detect services and versions
-  Arguments: { "target": "IP", "ports": "22,80,443" }
-- **nmap_os_detection**: Detect operating system
-  Arguments: { "target": "IP" }
-
-## SearchSploit Tools
-- **searchsploit_search**: Search ExploitDB for vulnerabilities
-  Arguments: { "query": "search term" }
-- **searchsploit_examine**: Examine a specific exploit
-  Arguments: { "id": "exploit-id" }
-
-## RAG Memory Tools
-- **rag_recall**: Recall security playbooks and anti-patterns
-  Arguments: { "query": "search query" }
-- **rag_store**: Store new security knowledge
-  Arguments: { "content": "text", "metadata": {} }
+${buildToolListing()}
 
 # STRICT CONSTRAINT
 You MUST ONLY use tools from the list above. Do NOT invent, guess, or hallucinate tool names.
@@ -170,7 +205,7 @@ export class ExecutorAgent {
     if (reasonerOutput.tactical_plan && reasonerOutput.tactical_plan.attack_vectors.length > 0) {
       console.log('[Executor] Using tactical plan from Reasoner — bypassing LLM planning.');
 
-      const steps: ExecutorStep[] = reasonerOutput.tactical_plan.attack_vectors
+      const rawSteps: ExecutorStep[] = reasonerOutput.tactical_plan.attack_vectors
         .sort((a, b) => a.priority - b.priority)
         .map((vector) => ({
           tool: vector.action.tool_name,
@@ -180,8 +215,25 @@ export class ExecutorAgent {
             `Execute vector ${vector.vector_id}`,
         }));
 
+      // Validate tactical plan steps against allowed tools whitelist
+      const validSteps = rawSteps.filter((step) => {
+        if (ALLOWED_TOOLS.has(step.tool)) {
+          return true;
+        }
+        console.log(
+          `[Executor] ⚠ Rejected unknown tool "${step.tool}" from Tactical Plan — not in allowed list`
+        );
+        return false;
+      });
+
+      if (validSteps.length < rawSteps.length) {
+        console.log(
+          `[Executor] Filtered ${rawSteps.length - validSteps.length}/${rawSteps.length} invalid tactical plan step(s)`,
+        );
+      }
+
       return {
-        steps,
+        steps: validSteps,
         current_step: 0,
         status: 'pending',
       };

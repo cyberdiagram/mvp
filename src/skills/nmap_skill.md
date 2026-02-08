@@ -89,6 +89,19 @@ Action: Service and version detection
 Command: nmap -Pn -sV -sC -O -p 22,80,443,3306 192.168.1.10
 ```
 
+#### **OS Fingerprinting Phase**
+
+```
+Thought Process:
+- "I have identified open ports and service versions."
+- "I need to know the underlying OS to narrow down exploit selection (e.g., Linux kernel vs Windows build)."
+- "RAG memory suggests this might be a network appliance (e.g., pfSense, Cisco). I need to verify the OS stack."
+- "Since host is confirmed up, I'll use -Pn to skip discovery."
+
+Action: OS Fingerprinting
+Command: nmap_os_detection (nmap -Pn -O --osscan-guess)
+```
+
 ---
 
 ## Reasoning Patterns

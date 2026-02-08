@@ -16,6 +16,9 @@
  */
 
 import 'dotenv/config';
+// Instrumentation MUST be imported before application modules
+// to capture all OpenTelemetry spans from startup
+import { shutdownTracing } from './instrumentation.js';
 import path from 'path';
 import * as readline from 'readline';
 import { PentestAgent } from './agent/index.js';
@@ -328,6 +331,7 @@ async function main(): Promise<void> {
           case 'quit':
             console.log('\n  Shutting down...');
             await agent.shutdown();
+            await shutdownTracing();
             rl.close();
             process.exit(0);
 

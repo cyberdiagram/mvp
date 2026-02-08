@@ -26,6 +26,9 @@
     "@cyber/mcp-nmap-client": "file:.yalc/@cyber/mcp-nmap-client",
     "@cyber/mcp-rag-memory-client": "file:.yalc/@cyber/mcp-rag-memory-client",
     "@cyber/mcp-searchsploit-client": "file:.yalc/@cyber/mcp-searchsploit-client",
+    "@langfuse/otel": "^4.5.1",
+    "@langfuse/tracing": "^4.5.1",
+    "@opentelemetry/sdk-node": "^0.211.0",
     "dotenv": "^17.2.3",
     "typescript": "^5.9.3"
   },

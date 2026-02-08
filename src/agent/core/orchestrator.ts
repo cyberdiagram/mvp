@@ -17,6 +17,7 @@ import {
   VulnerabilityInfo,
   TargetProfile,
 } from './types.js';
+import { startActiveObservation, propagateAttributes } from '@langfuse/tracing';
 
 export interface AgentConfig {
   anthropicApiKey: string;
@@ -102,12 +103,15 @@ export class PentestAgent {
   /** Set of analyzed service fingerprints to avoid duplicate intelligence analysis */
   private analyzedServiceFingerprints: Set<string> = new Set();
 
+  /** Tracks executed command signatures and their count for duplicate detection */
+  private executionHistory: Map<string, number> = new Map();
+
   /**
    * DEBUG SWITCH: When true, prevents anti-pattern content from being injected
    * into the Reasoner's prompt. Playbook injection is unaffected.
    * Set to false to restore normal behavior after testing.
    */
-  private debugDisableAntiPatternInjection: boolean = true;
+  private debugDisableAntiPatternInjection: boolean = false;
 
   /**
    * Creates a new PentestAgent with all subagents.
@@ -271,7 +275,8 @@ export class PentestAgent {
     console.log('\n[RAG Memory] Phase 0: Checking for past failure warnings...');
 
     try {
-      const { antiPatterns, formattedText } = await this.ragMemory.recallInternalWarnings(observation);
+      const { antiPatterns, formattedText } =
+        await this.ragMemory.recallInternalWarnings(observation);
 
       if (antiPatterns.length > 0 && formattedText) {
         if (this.debugDisableAntiPatternInjection) {
@@ -372,14 +377,30 @@ export class PentestAgent {
   private async _runToolExecutionLoop(
     plan: ExecutorPlan,
     allDiscoveredServices: DiscoveredService[]
-  ): Promise<{ results: CleanedData[]; failures: Array<{ tool: string; error: string }> }> {
+  ): Promise<{
+    results: CleanedData[];
+    failures: Array<{ tool: string; error: string }>;
+    repeatedCommands: string[];
+  }> {
     const results: CleanedData[] = [];
     const failures: Array<{ tool: string; error: string }> = [];
+    const repeatedCommands: string[] = [];
     let currentPlan = { ...plan };
 
     while (true) {
       const step = this.executor.getNextStep(currentPlan);
       if (!step) break;
+
+      // Duplicate operation detection
+      const commandSignature = `${step.tool}:${JSON.stringify(step.arguments)}`;
+      const priorCount = this.executionHistory.get(commandSignature) || 0;
+      if (priorCount > 0) {
+        console.log(
+          `[Orchestrator] ⚠ Repeated command detected (run #${priorCount + 1}): ${step.tool} ${JSON.stringify(step.arguments)}`
+        );
+        repeatedCommands.push(commandSignature);
+      }
+      this.executionHistory.set(commandSignature, priorCount + 1);
 
       // MCP Agent executes tool
       console.log(`\n[MCP Agent] Executing: ${step.tool}`);
@@ -403,7 +424,7 @@ export class PentestAgent {
             for (const s of services) {
               const key = `${s.host}:${s.port}`;
               const existingIdx = allDiscoveredServices.findIndex(
-                (existing) => `${existing.host}:${existing.port}` === key,
+                (existing) => `${existing.host}:${existing.port}` === key
               );
               if (existingIdx === -1) {
                 allDiscoveredServices.push(s);
@@ -418,12 +439,12 @@ export class PentestAgent {
               }
             }
             console.log(
-              `[Data Cleaner] ✓ Extracted ${services.length} services (${added} new, ${services.length - added} deduplicated)`,
+              `[Data Cleaner] ✓ Extracted ${services.length} services (${added} new, ${services.length - added} deduplicated)`
             );
             services.forEach((s, i) => {
               const product = s.product ? `${s.product} ${s.version || ''}`.trim() : 'unknown';
               console.log(
-                `[Data Cleaner]   ${i + 1}. ${s.host}:${s.port} ${s.service} | product=${product} | category=${s.category} | criticality=${s.criticality} | confidence=${s.confidence}`,
+                `[Data Cleaner]   ${i + 1}. ${s.host}:${s.port} ${s.service} | product=${product} | category=${s.category} | criticality=${s.criticality} | confidence=${s.confidence}`
               );
             });
           }
@@ -438,7 +459,7 @@ export class PentestAgent {
       currentPlan = this.executor.advancePlan(currentPlan);
     }
 
-    return { results, failures };
+    return { results, failures, repeatedCommands };
   }
 
   /**
@@ -686,6 +707,7 @@ export class PentestAgent {
   private _prepareNextObservation(
     allResults: CleanedData[],
     failures?: Array<{ tool: string; error: string }>,
+    repeatedCommands?: string[]
   ): string {
     const hasFailures = failures && failures.length > 0;
 
@@ -730,6 +752,34 @@ export class PentestAgent {
     }
 
     obs += failureReport;
+
+    // Inject strong warning for duplicate commands
+    if (repeatedCommands && repeatedCommands.length > 0) {
+      obs += `\n\n[SYSTEM INTERVENTION - LOOP DETECTED]`;
+      obs += `\nYou have executed the EXACT same command(s) multiple times with identical parameters. This indicates your current strategy is hitting a dead end or a tool limitation.`;
+      obs += `\n\nCRITICAL INSTRUCTIONS:`;
+      obs += `\n1. STOP repeating the last action. It will not produce new results.`;
+      obs += `\n2. RE-EVALUATE your available tools. Are you trying to perform an action (like directory scanning) with an incompatible tool?`;
+      obs += `\n3. PIVOT your strategy. If you cannot verify a hypothesis with current tools, make a logical assumption based on existing evidence and proceed to the next phase (e.g., from Enumeration to Vulnerability Research).`;
+      obs += `\n4. DO NOT ask for "more details" on the same service unless you change the tool or parameters significantly.`;
+    }
+
+    // Generic failure loop detection: all queries returned empty results
+    const negativeKeywords = ['no exploits found', '0 results', 'no matches', 'not found', '0 shellcodes', '0 exploits', 'no relevant warnings', 'no relevant playbooks'];
+    const allStepsNegative = allResults.length > 0 && allResults.every((r) =>
+      negativeKeywords.some((kw) => r.summary.toLowerCase().includes(kw))
+    );
+
+    if (allStepsNegative) {
+      obs += `\n\n[SYSTEM ADVICE - DATABASE EXHAUSTION]`;
+      obs += `\nAll your database queries (external exploits or internal RAG knowledge) yielded NO specific results for these parameters.`;
+      obs += `\n\nSTRATEGY GUIDANCE:`;
+      obs += `\n1. STOP searching. The information you are looking for is NOT in the current databases.`;
+      obs += `\n2. DO NOT keep slightly changing keywords; it will not change the database content.`;
+      obs += `\n3. USE GENERAL PRINCIPLES: If no specific CVE/Playbook is found, fall back to your general training about this technology (e.g., typical misconfigurations, common vulnerabilities for the detected service versions).`;
+      obs += `\n4. PROCEED TO MANUAL STEPS: Formulate a hypothesis based on the service version and security posture, then attempt to verify it through active tools rather than passive database lookups.`;
+    }
+
     return obs;
   }
 
@@ -762,7 +812,8 @@ export class PentestAgent {
 
     // Initialize loop state
     this.reasoner.reset();
-    this.analyzedServiceFingerprints.clear(); // Reset analyzed services tracker
+    this.analyzedServiceFingerprints.clear();
+    this.executionHistory.clear();
     let iteration = 0;
     const maxIterations = 15;
     let aggregatedResults: CleanedData[] = [];
@@ -772,21 +823,46 @@ export class PentestAgent {
     let lastTacticalPlan: TacticalPlanObject | null = null;
 
     // ========================================================================
-    // MAIN RECONNAISSANCE LOOP
+    // MAIN RECONNAISSANCE LOOP (wrapped in Langfuse trace)
     // ========================================================================
-    while (iteration < maxIterations) {
+    await startActiveObservation('reconnaissance', async (rootSpan) => {
+    rootSpan.update({
+      input: { target, sessionId: this.sessionId },
+      metadata: { maxIterations },
+    });
+    await propagateAttributes({
+      sessionId: this.sessionId,
+      traceName: `recon-${target}`,
+      tags: ['reconnaissance', 'pentest'],
+      metadata: { target },
+    }, async () => {
+
+    let missionComplete = false;
+
+    while (iteration < maxIterations && !missionComplete) {
       iteration++;
       console.log(`\n[Orchestrator] === Iteration ${iteration} ===`);
+
+      await startActiveObservation(`iteration-${iteration}`, async (iterSpan) => {
+      iterSpan.update({ input: { iteration, observation: observation.substring(0, 500) } });
 
       // ======================================================================
       // PHASE 0: RAG Memory Recall (Pre-Reasoning)
       // ======================================================================
-      await this._runRAGMemoryRecall(observation);
+      await startActiveObservation('phase0-rag-recall', async (span) => {
+        await this._runRAGMemoryRecall(observation);
+      });
 
       // ======================================================================
       // PHASE 1: Strategic Reasoning
       // ======================================================================
-      const reasoning = await this._runReasoningPhase(observation);
+      let reasoning!: ReasonerOutput;
+      await startActiveObservation('phase1-reasoning', async (span) => {
+        reasoning = await this._runReasoningPhase(observation);
+        span.update({
+          output: { thought: reasoning.thought, action: reasoning.action, is_complete: reasoning.is_complete },
+        });
+      });
 
       // Store tactical plan if present (displayed after all iterations)
       if (reasoning.tactical_plan) {
@@ -796,35 +872,64 @@ export class PentestAgent {
       // Check if mission is complete
       if (reasoning.is_complete) {
         console.log('\n[Orchestrator] Reasoner indicates mission complete');
-        break;
+        iterSpan.update({ output: { status: 'mission_complete' } });
+        missionComplete = true;
+        return;
       }
 
       // ======================================================================
       // PHASE 2: Tactical Execution Planning
       // ======================================================================
-      const openPorts = [...new Set(allDiscoveredServices.map((s) => s.port))];
-      const plan = await this._runExecutionPlanning(reasoning, target, openPorts);
+      let plan: ExecutorPlan | null = null;
+      await startActiveObservation('phase2-execution-planning', async (span) => {
+        const openPorts = [...new Set(allDiscoveredServices.map((s) => s.port))];
+        plan = await this._runExecutionPlanning(reasoning, target, openPorts);
+        span.update({ output: { steps: plan?.steps.length ?? 0 } });
+      });
 
       // If no executable steps, continue to next iteration
       if (!plan) {
         observation = this._prepareNextObservation([]);
-        continue;
+        iterSpan.update({ output: { status: 'no_executable_steps' } });
+        return;
       }
 
       // ======================================================================
       // PHASE 3: Tool Execution and Data Cleaning
       // ======================================================================
-      const { results: executionResults, failures: executionFailures } =
-        await this._runToolExecutionLoop(plan, allDiscoveredServices);
+      let executionResults: CleanedData[] = [];
+      let executionFailures: Array<{ tool: string; error: string }> = [];
+      let repeatedCommands: string[] = [];
+      await startActiveObservation('phase3-tool-execution', async (span) => {
+        const result = await this._runToolExecutionLoop(plan!, allDiscoveredServices);
+        executionResults = result.results;
+        executionFailures = result.failures;
+        repeatedCommands = result.repeatedCommands;
+        span.update({
+          output: {
+            results: executionResults.length,
+            failures: executionFailures.length,
+            repeatedCommands: repeatedCommands.length,
+          },
+        });
+      });
       aggregatedResults.push(...executionResults);
 
       // ======================================================================
       // PHASE 4: Intelligence Layer Analysis
       // ======================================================================
-      currentIntelligence = await this._runIntelligencePhase(
-        allDiscoveredServices,
-        currentIntelligence
-      );
+      await startActiveObservation('phase4-intelligence', async (span) => {
+        currentIntelligence = await this._runIntelligencePhase(
+          allDiscoveredServices,
+          currentIntelligence
+        );
+        span.update({
+          output: {
+            services: allDiscoveredServices.length,
+            vulnerabilities: currentIntelligence?.vulnerabilities?.length ?? 0,
+          },
+        });
+      });
 
       // Attach intelligence to the last result for downstream use
       const lastResult = executionResults[executionResults.length - 1];
@@ -848,12 +953,35 @@ export class PentestAgent {
       // ======================================================================
       // PHASE 6: Prepare Next Observation (ALL results, not just last)
       // ======================================================================
-      observation = this._prepareNextObservation(executionResults, executionFailures);
+      observation = this._prepareNextObservation(
+        executionResults,
+        executionFailures,
+        repeatedCommands
+      );
       this.reasoner.addObservation(observation);
+
+      iterSpan.update({ output: { status: 'completed', resultsThisIteration: executionResults.length } });
+      }); // end iteration span
 
       // Small delay between iterations to avoid overwhelming the system
       await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Break out of the while loop if the reasoner indicated completion inside the iteration
+      if (aggregatedResults.length > 0 || iteration >= maxIterations) {
+        // Check if mission was marked complete (reasoning.is_complete was handled inside the span)
+      }
     }
+
+    rootSpan.update({
+      output: {
+        totalIterations: iteration,
+        totalResults: aggregatedResults.length,
+        servicesDiscovered: allDiscoveredServices.length,
+      },
+    });
+
+    }); // end propagateAttributes
+    }); // end root span
 
     console.log('\n' + '='.repeat(60));
     console.log('[Orchestrator] Reconnaissance finished');

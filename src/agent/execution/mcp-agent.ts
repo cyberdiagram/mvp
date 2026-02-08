@@ -193,6 +193,10 @@ export class MCPAgent {
         );
         break;
 
+      case 'nmap_os_detection':
+        result = await this.nmapClient.osDetection(args.target as string);
+        break;
+
       default:
         return {
           success: false,
