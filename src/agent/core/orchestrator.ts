@@ -266,47 +266,20 @@ export class PentestAgent {
    * @private
    */
   private async _runRAGMemoryRecall(observation: string): Promise<void> {
-    if (!this.config.enableRAGMemory || !this.config.mcpServers.rag_memory) {
-      return; // RAG Memory not enabled
-    }
+    if (!this.ragMemory) return;
 
-    console.log('\n[RAG Memory] Querying past experience...');
-    console.log(
-      `[RAG Memory] Observation: ${observation.substring(0, 150)}${observation.length > 1000 ? '...' : ''}`
-    );
+    console.log('\n[RAG Memory] Phase 0: Checking for past failure warnings...');
 
     try {
-      const memoryRecall = await this.mcpAgent.executeTool({
-        tool: 'rag_recall',
-        arguments: { observation, top_k: 3 },
-        description: 'Recall anti-patterns from past sessions',
-      });
+      const { antiPatterns, formattedText } = await this.ragMemory.recallInternalWarnings(observation);
 
-      if (memoryRecall.success && memoryRecall.output) {
-        try {
-          const parsed = JSON.parse(memoryRecall.output);
-          console.log(`[RAG Memory] ✓ Matches: ${parsed.matches || 0}`);
-          if (parsed.patterns && parsed.patterns.length > 0) {
-            parsed.patterns.forEach((p: any, i: number) => {
-              console.log(
-                `[RAG Memory]   ${i + 1}. [${p.id}] score=${p.relevance_score?.toFixed(3)} keywords="${p.trigger_keywords}"`
-              );
-            });
-          }
-        } catch {
-          // Non-JSON output, just log success
-        }
-        console.log(
-          `[RAG Memory] Output: ${memoryRecall.output.substring(0, 300)}${memoryRecall.output.length > 300 ? '...' : ''}`
-        );
+      if (antiPatterns.length > 0 && formattedText) {
         if (this.debugDisableAntiPatternInjection) {
-          console.log('[RAG Memory] ⚠ DEBUG: Anti-pattern injection SKIPPED (debugDisableAntiPatternInjection=true)');
+          console.log('[RAG Memory] ⚠ DEBUG: Anti-pattern injection SKIPPED');
         } else {
-          console.log('[RAG Memory] ✓ Injecting warnings into Reasoner context');
-          this.reasoner.injectMemoryContext(memoryRecall.output);
+          console.log(`[RAG Memory] ✓ Injected ${antiPatterns.length} failure lesson(s)`);
+          this.reasoner.injectMemoryContext(formattedText);
         }
-      } else {
-        console.log('[RAG Memory] No matches found');
       }
     } catch (err) {
       console.log('[RAG Memory] ⚠ Failed (continuing without memory):', err);
@@ -632,55 +605,23 @@ export class PentestAgent {
     vulnerabilities: VulnerabilityInfo[],
     profile: TargetProfile | null
   ): Promise<void> {
-    if (!this.ragMemory) {
-      return; // RAG Memory not initialized
-    }
+    if (!this.ragMemory) return;
 
-    console.log('\n[RAG Memory] Querying past experiences...');
+    console.log('\n[RAG Memory] Phase 4b: Searching attack playbooks...');
 
     try {
-      // Extract service names for query (deduplicated, concise for semantic search)
       const serviceNames = [
         ...new Set(services.map((s) => s.product || s.service).filter((s) => s !== 'unknown')),
       ];
-      const profileStr = profile
-        ? `${profile.os_family || ''} ${profile.tech_stack?.join(' ') || ''}`.trim()
-        : undefined;
 
-      // Query RAG memory (only services + profile, no CVE flood)
-      const ragResult = await this.ragMemory.queryMemory(
-        {
-          services: serviceNames.length > 0 ? serviceNames : undefined,
-          profile: profileStr || undefined,
-        },
-        3 // Top 3 results per type
-      );
+      const { playbooks, formattedText } = await this.ragMemory.searchHandbook({
+        services: serviceNames.length > 0 ? serviceNames : undefined,
+        profile: profile?.os_family || undefined,
+      });
 
-      if (ragResult.playbooks.length > 0 || ragResult.antiPatterns.length > 0) {
-        console.log(
-          `[RAG Memory] ✓ Found ${ragResult.playbooks.length} playbooks, ${ragResult.antiPatterns.length} anti-patterns`
-        );
-
-        if (this.debugDisableAntiPatternInjection && ragResult.antiPatterns.length > 0) {
-          console.log('[RAG Memory] ⚠ DEBUG: Anti-pattern injection SKIPPED (debugDisableAntiPatternInjection=true)');
-        }
-
-        // Inject RAG context into Reasoner (filter out anti-patterns if debug flag is set)
-        const textToInject = this.debugDisableAntiPatternInjection
-          ? ragResult.formattedText.replace(
-              /\[MEMORY RECALL - WARNINGS FROM PAST EXPERIENCE\][\s\S]*?\[END MEMORY RECALL\]\n*/,
-              ''
-            )
-          : ragResult.formattedText;
-
-        if (textToInject.trim()) {
-          this.reasoner.injectMemoryContext(textToInject);
-          console.log('[RAG Memory] ✓ Context injected into Reasoner');
-        } else {
-          console.log('[RAG Memory] No content to inject (anti-patterns filtered, no playbooks)');
-        }
-      } else {
-        console.log('[RAG Memory] No relevant memories found');
+      if (playbooks.length > 0 && formattedText) {
+        console.log(`[RAG Memory] ✓ Injected ${playbooks.length} attack playbook(s)`);
+        this.reasoner.injectMemoryContext(formattedText);
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -743,12 +684,12 @@ export class PentestAgent {
    * @private
    */
   private _prepareNextObservation(
-    lastResult: CleanedData | null,
+    allResults: CleanedData[],
     failures?: Array<{ tool: string; error: string }>,
   ): string {
     const hasFailures = failures && failures.length > 0;
 
-    if (!lastResult && !hasFailures) {
+    if (allResults.length === 0 && !hasFailures) {
       return 'No executable steps were generated. The Executor could not map the requested action to available tools. Reassess the strategy using only available tools: nmap_*, searchsploit_*, rag_*.';
     }
 
@@ -759,13 +700,22 @@ export class PentestAgent {
       failureReport = `\n\nWARNING — ${failures!.length} tool(s) FAILED:\n${failureLines}\nThese actions were NOT completed. Do NOT assume their results are available.`;
     }
 
-    if (!lastResult && hasFailures) {
+    if (allResults.length === 0 && hasFailures) {
       return `ALL tool executions failed this iteration. No new data was collected.${failureReport}`;
     }
 
-    if (lastResult!.intelligence) {
-      const intel = lastResult!.intelligence;
-      let obs = `Tool execution completed.\n\nDiscovered Services: ${intel.discoveredServices.length} services found`;
+    // Build summary of ALL step results so the Reasoner sees every outcome
+    const stepSummaries = allResults
+      .map((r, i) => `  ${i + 1}. [${r.type}] ${r.summary}`)
+      .join('\n');
+
+    let obs = `Tool execution completed (${allResults.length} step(s)):\n${stepSummaries}`;
+
+    // Attach intelligence context from the last result that has it
+    const lastWithIntel = [...allResults].reverse().find((r) => r.intelligence);
+    if (lastWithIntel?.intelligence) {
+      const intel = lastWithIntel.intelligence;
+      obs += `\n\nDiscovered Services: ${intel.discoveredServices.length} services found`;
 
       if (intel.targetProfile) {
         obs += `\n\nTarget Profile:\n- OS: ${intel.targetProfile.os_family || 'Unknown'}\n- Security: ${intel.targetProfile.security_posture}\n- Risk: ${intel.targetProfile.risk_level}`;
@@ -777,13 +727,10 @@ export class PentestAgent {
           .map((v) => v.cve_id)
           .join(', ')}`;
       }
-
-      obs += `\n\nSummary: ${lastResult!.summary}`;
-      obs += failureReport;
-      return obs;
     }
 
-    return `Tool execution completed. ${lastResult!.summary}${failureReport}`;
+    obs += failureReport;
+    return obs;
   }
 
   // ============================================================================
@@ -860,7 +807,7 @@ export class PentestAgent {
 
       // If no executable steps, continue to next iteration
       if (!plan) {
-        observation = this._prepareNextObservation(null);
+        observation = this._prepareNextObservation([]);
         continue;
       }
 
@@ -871,9 +818,6 @@ export class PentestAgent {
         await this._runToolExecutionLoop(plan, allDiscoveredServices);
       aggregatedResults.push(...executionResults);
 
-      // Get the last result for next observation
-      const lastResult = executionResults[executionResults.length - 1];
-
       // ======================================================================
       // PHASE 4: Intelligence Layer Analysis
       // ======================================================================
@@ -882,7 +826,8 @@ export class PentestAgent {
         currentIntelligence
       );
 
-      // Attach intelligence to cleaned data if available
+      // Attach intelligence to the last result for downstream use
+      const lastResult = executionResults[executionResults.length - 1];
       if (lastResult && currentIntelligence) {
         lastResult.intelligence = currentIntelligence;
       }
@@ -901,9 +846,9 @@ export class PentestAgent {
       }
 
       // ======================================================================
-      // PHASE 6: Prepare Next Observation
+      // PHASE 6: Prepare Next Observation (ALL results, not just last)
       // ======================================================================
-      observation = this._prepareNextObservation(lastResult, executionFailures);
+      observation = this._prepareNextObservation(executionResults, executionFailures);
       this.reasoner.addObservation(observation);
 
       // Small delay between iterations to avoid overwhelming the system

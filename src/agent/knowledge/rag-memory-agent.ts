@@ -23,7 +23,7 @@ export interface RAGMemoryDocument {
   document: string;
   /** Metadata for filtering */
   metadata: {
-    type: 'playbook' | 'anti_pattern';
+    type: 'playbook' | 'anti_pattern' | 'session_playbook';
     service: string;
     port?: number;
     category: string;
@@ -68,6 +68,113 @@ export class RAGMemoryAgent {
    */
   constructor(mcpAgent: MCPAgent) {
     this.mcpAgent = mcpAgent;
+  }
+
+  /**
+   * Phase 0: Reactive Warnings (Learning from Mistakes)
+   *
+   * Retrieves "pitfalls I've fallen into" from the anti_patterns collection.
+   * Returns formatted warnings ready for direct injection into the Reasoner's
+   * context before strategic reasoning begins.
+   *
+   * Unlike searchHandbook() which retrieves proactive strategies from the
+   * playbooks collection, this method focuses strictly on what NOT to do.
+   *
+   * @param observation - Current observation or scenario description
+   * @param topK - Number of anti-pattern results (default: 3)
+   * @returns Object with antiPatterns array and formatted warning text
+   */
+  async recallInternalWarnings(
+    observation: string,
+    topK: number = 3
+  ): Promise<{ antiPatterns: RAGMemoryDocument[]; formattedText: string }> {
+    console.log(`[RAG Memory] Recalling internal warnings...`);
+
+    try {
+      const antiPatterns = await this.queryAntiPatterns(observation, topK);
+
+      const sections: string[] = [];
+      if (antiPatterns.length > 0) {
+        sections.push('[MEMORY RECALL - WARNINGS FROM PAST EXPERIENCE]');
+        sections.push(
+          'The following are warnings based on past failures. Ensure you avoid these in upcoming decisions:\n'
+        );
+        antiPatterns.forEach((p, i) => {
+          sections.push(`[WARNING ${i + 1}] ${p.document}`);
+        });
+        sections.push('[END MEMORY RECALL]');
+
+        console.log(`[RAG Memory] ✓ Found ${antiPatterns.length} warning(s)`);
+        antiPatterns.forEach((p, i) => {
+          console.log(`[RAG Memory]   ${i + 1}. [${p.id}] tags="${p.metadata.tags || ''}"`);
+        });
+      } else {
+        console.log('[RAG Memory] No relevant warnings found');
+      }
+
+      return { antiPatterns, formattedText: sections.join('\n') };
+    } catch (error) {
+      console.error('[RAG Memory] Failed to recall warnings:', error);
+      return { antiPatterns: [], formattedText: '' };
+    }
+  }
+
+  /**
+   * Phase 4b: Proactive Handbook Retrieval (Searching Playbooks)
+   *
+   * Retrieves "successful paths" from the playbooks collection, categorizing
+   * results into internal past successes (session_playbook) and external
+   * industry reports/standard playbooks.
+   *
+   * The Reasoner receives hierarchical context where internal experience
+   * is presented with higher confidence than external reports.
+   *
+   * @param context - Intelligence context with services and profile
+   * @param topK - Number of playbook results (default: 5)
+   * @returns Object with playbooks array and formatted strategy text
+   */
+  async searchHandbook(
+    context: { services?: string[]; profile?: string },
+    topK: number = 5
+  ): Promise<{ playbooks: RAGMemoryDocument[]; formattedText: string }> {
+    const queryText = this.buildSemanticQuery(context);
+    console.log(`[RAG Memory] Searching handbook: ${queryText}`);
+
+    try {
+      const allPlaybooks = await this.queryPlaybooks(queryText, topK);
+
+      // Categorize based on metadata type
+      const myPastSuccesses = allPlaybooks.filter((p) => p.metadata.type === 'session_playbook');
+      const industryReports = allPlaybooks.filter((p) => p.metadata.type !== 'session_playbook');
+
+      const sections: string[] = [];
+      if (allPlaybooks.length > 0) {
+        sections.push('[KNOWLEDGE RETRIEVAL - ATTACK STRATEGIES]');
+
+        if (myPastSuccesses.length > 0) {
+          sections.push('\n>>> MY PAST SUCCESSES (High Confidence):');
+          myPastSuccesses.forEach((p) => sections.push(`- ${p.document}`));
+        }
+
+        if (industryReports.length > 0) {
+          sections.push('\n>>> INDUSTRY STANDARD PLAYBOOKS & REPORTS:');
+          industryReports.forEach((p) => sections.push(`- ${p.document}`));
+        }
+
+        sections.push('\n[END KNOWLEDGE RETRIEVAL]');
+
+        console.log(
+          `[RAG Memory] ✓ Found ${myPastSuccesses.length} internal successes, ${industryReports.length} industry playbooks`
+        );
+      } else {
+        console.log('[RAG Memory] No relevant playbooks found');
+      }
+
+      return { playbooks: allPlaybooks, formattedText: sections.join('\n') };
+    } catch (error) {
+      console.error('[RAG Memory] Failed to search handbook:', error);
+      return { playbooks: [], formattedText: '' };
+    }
   }
 
   /**
@@ -135,7 +242,7 @@ export class RAGMemoryAgent {
         tool: 'rag_query_playbooks',
         arguments: {
           query: queryText,
-          top_k: topK,
+          n_results: topK,
         },
         description: 'Query RAG memory for successful exploitation playbooks',
       });
@@ -200,14 +307,17 @@ export class RAGMemoryAgent {
 
       if (recallResult.success && recallResult.patterns && Array.isArray(recallResult.patterns)) {
         // Convert RAGPattern[] to RAGMemoryDocument[]
+        // Preserve metadata.type from server if available (e.g., 'session_playbook')
         return recallResult.patterns.map((pattern: any) => ({
           id: pattern.id || `${type}_${Date.now()}`,
           document: pattern.prompt_text || pattern.document || '',
           metadata: {
-            type,
-            service: 'unknown',
-            category: 'general',
-            tags: pattern.trigger_keywords || '',
+            type: pattern.metadata?.type || type,
+            service: pattern.metadata?.service || 'unknown',
+            category: pattern.metadata?.category || 'general',
+            tags: pattern.trigger_keywords || pattern.metadata?.tags || '',
+            source: pattern.metadata?.source,
+            cve: pattern.metadata?.cve,
           },
         }));
       }

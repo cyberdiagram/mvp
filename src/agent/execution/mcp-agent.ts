@@ -309,11 +309,11 @@ export class MCPAgent {
     try {
       switch (tool) {
         case 'rag_recall': {
-          // Queries the anti_patterns collection
+          // Queries the anti_patterns collection via SDK
           const observation = (args.query || args.observation) as string;
           const topK = (args.top_k as number) || 3;
 
-          const result = await this.ragMemoryClient.recall({
+          const result = await this.ragMemoryClient.recallMyExperience({
             observation,
             top_k: topK,
           });
@@ -326,14 +326,11 @@ export class MCPAgent {
         }
 
         case 'rag_query_playbooks': {
-          // Queries the playbooks collection via dedicated MCP tool
+          // Queries the playbooks collection via SDK
           const query = (args.query || args.observation) as string;
-          const topK = (args.top_k as number) || 3;
+          const nResults = (args.n_results as number) || (args.top_k as number) || 3;
 
-          const result = await (this.ragMemoryClient as any).callTool('rag_query_playbooks', {
-            query,
-            top_k: topK,
-          });
+          const result = await this.ragMemoryClient.searchSecurityHandbook(query, nResults);
 
           return {
             success: result.success,
