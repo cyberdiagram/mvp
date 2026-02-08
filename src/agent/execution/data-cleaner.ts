@@ -93,6 +93,9 @@ export class DataCleanerAgent {
   /** Anthropic API client */
   private client: Anthropic;
 
+  /** Injected skill context for advanced fingerprinting (e.g., pfSense, WebLogic) */
+  private skillContext: string = '';
+
   /**
    * Creates a new DataCleanerAgent.
    *
@@ -100,6 +103,20 @@ export class DataCleanerAgent {
    */
   constructor(apiKey: string) {
     this.client = new Anthropic({ apiKey });
+  }
+
+  /**
+   * Sets skill context for enhanced parsing and fingerprinting.
+   *
+   * Injected skill content is appended to the LLM system prompt during
+   * llmBasedParsing, enabling the model to identify specific technologies
+   * (e.g., pfSense from lighttpd headers, WebLogic from t3 protocol)
+   * that rule-based parsing cannot detect.
+   *
+   * @param context - Formatted skill content from SkillsLoader.buildSkillContext()
+   */
+  public setSkillContext(context: string): void {
+    this.skillContext = context;
   }
 
   /**
@@ -249,14 +266,18 @@ export class DataCleanerAgent {
    * @returns CleanedData parsed by the LLM
    */
   private async llmBasedParsing(rawOutput: string, toolType: string): Promise<CleanedData> {
-    // Use cache_control to cache static system prompt (~90% token savings on repeated calls)
+    // Build system prompt: static base + optional skill context for advanced fingerprinting
+    const systemPrompt = this.skillContext
+      ? `${DATA_CLEANER_SYSTEM_PROMPT}\n\n# ADDITIONAL PARSING SKILLS & FINGERPRINTS\n${this.skillContext}\n\nRemember: Use the provided skills to identify specific technologies (like pfSense, CMS, or Middleware) hidden in the raw output.`
+      : DATA_CLEANER_SYSTEM_PROMPT;
+
     const response = await this.client.messages.create({
       model: DATA_CLEANER_MODEL,
       max_tokens: DATA_CLEANER_MAX_TOKENS,
       system: [
         {
           type: 'text',
-          text: DATA_CLEANER_SYSTEM_PROMPT,
+          text: systemPrompt,
           cache_control: { type: 'ephemeral' },
         },
       ],

@@ -27,3 +27,8 @@ yalc.lock
 # AI Assistant Project Instructions
 CLAUDE.md
 GEMINI.md
+
+
+# Claude logs
+log.txt
+logs/

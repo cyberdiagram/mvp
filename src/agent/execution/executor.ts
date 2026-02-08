@@ -24,6 +24,22 @@ export const EXECUTOR_MAX_TOKENS = 1000;
  * - Ensure proper sequencing (discovery before scan, etc.)
  * - Return structured JSON with steps array
  */
+/**
+ * Canonical list of tools the Executor is allowed to use.
+ * Any tool not in this list will be filtered out after LLM planning.
+ */
+export const ALLOWED_TOOLS = new Set([
+  'nmap_host_discovery',
+  'nmap_port_scan',
+  'nmap_service_detection',
+  'nmap_os_detection',
+  'searchsploit_search',
+  'searchsploit_examine',
+  'searchsploit_update',
+  'rag_recall',
+  'rag_store',
+]);
+
 export const EXECUTOR_SYSTEM_PROMPT = `You are a tactical workflow executor for penetration testing operations.
 
 Your role is to:
@@ -32,16 +48,33 @@ Your role is to:
 3. Sequence operations correctly with proper dependencies
 4. Choose appropriate tools and parameters
 
-# Available Tools
+# Available Tools (EXHAUSTIVE LIST — you MUST only use tools from this list)
 
+## Nmap Tools
 - **nmap_host_discovery**: Discover live hosts on a network
   Arguments: { "target": "IP or CIDR" }
-
 - **nmap_port_scan**: Scan ports on target(s)
   Arguments: { "target": "IP", "ports": "1-1000" or "top-1000", "scanType": "tcp" or "udp" }
-
 - **nmap_service_detection**: Detect services and versions
   Arguments: { "target": "IP", "ports": "22,80,443" }
+- **nmap_os_detection**: Detect operating system
+  Arguments: { "target": "IP" }
+
+## SearchSploit Tools
+- **searchsploit_search**: Search ExploitDB for vulnerabilities
+  Arguments: { "query": "search term" }
+- **searchsploit_examine**: Examine a specific exploit
+  Arguments: { "id": "exploit-id" }
+
+## RAG Memory Tools
+- **rag_recall**: Recall security playbooks and anti-patterns
+  Arguments: { "query": "search query" }
+- **rag_store**: Store new security knowledge
+  Arguments: { "content": "text", "metadata": {} }
+
+# STRICT CONSTRAINT
+You MUST ONLY use tools from the list above. Do NOT invent, guess, or hallucinate tool names.
+If the requested action cannot be accomplished with the available tools, return an empty steps array.
 
 # Response Format
 
@@ -131,6 +164,30 @@ export class ExecutorAgent {
     reasonerOutput: ReasonerOutput,
     contextInfo?: { target?: string; openPorts?: number[] },
   ): Promise<ExecutorPlan> {
+    // If the Reasoner already provided a structured tactical plan, use it directly.
+    // This avoids a redundant LLM call and prevents the Executor from hallucinating
+    // non-existent tools that override the Reasoner's valid tool selections.
+    if (reasonerOutput.tactical_plan && reasonerOutput.tactical_plan.attack_vectors.length > 0) {
+      console.log('[Executor] Using tactical plan from Reasoner — bypassing LLM planning.');
+
+      const steps: ExecutorStep[] = reasonerOutput.tactical_plan.attack_vectors
+        .sort((a, b) => a.priority - b.priority)
+        .map((vector) => ({
+          tool: vector.action.tool_name,
+          arguments: vector.action.parameters,
+          description:
+            vector.prediction_metrics.hypothesis.rationale_tags.join(', ') ||
+            `Execute vector ${vector.vector_id}`,
+        }));
+
+      return {
+        steps,
+        current_step: 0,
+        status: 'pending',
+      };
+    }
+
+    // Fallback: no tactical plan available, use LLM to generate execution steps
     // Build context string to help Executor choose appropriate parameters
     let contextStr = '';
     if (contextInfo) {
@@ -184,8 +241,26 @@ export class ExecutorAgent {
     if (jsonMatch) {
       try {
         const parsed = JSON.parse(jsonMatch[0]);
+        const rawSteps: ExecutorStep[] = parsed.steps || [];
+
+        // Validate each step against the allowed tool whitelist.
+        // Reject any hallucinated tool names the LLM may have invented.
+        const validSteps = rawSteps.filter((step) => {
+          if (ALLOWED_TOOLS.has(step.tool)) {
+            return true;
+          }
+          console.log(`[Executor] ⚠ Rejected unknown tool "${step.tool}" — not in allowed list`);
+          return false;
+        });
+
+        if (validSteps.length < rawSteps.length) {
+          console.log(
+            `[Executor] Filtered ${rawSteps.length - validSteps.length}/${rawSteps.length} invalid step(s)`,
+          );
+        }
+
         return {
-          steps: parsed.steps || [],
+          steps: validSteps,
           current_step: parsed.current_step || 0,
           status: parsed.status || 'pending',
         };

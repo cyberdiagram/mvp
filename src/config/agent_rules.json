@@ -1,5 +1,7 @@
 {
   "nmap": [
-    "After host discovery confirms host is up, ALL subsequent scans MUST include -Pn to skip redundant ping probes"
+    "After host discovery confirms host is up, ALL subsequent scans MUST include -Pn to skip redundant ping probes",
+    "When service detection (-sV) returns generic service names (https, http, ssh, ssl) without product/version info, IMMEDIATELY follow up with aggressive version detection: nmap -Pn -sV --version-intensity 9 --script=banner,ssl-cert,http-server-header -p <port>",
+    "For SSL/TLS services (port 443, 8443, or any ssl/* service), default version detection often fails. Always use --version-intensity 9 with NSE scripts: ssl-cert, ssl-enum-ciphers, http-server-header to extract product/version information"
   ]
 }

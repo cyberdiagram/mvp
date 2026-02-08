@@ -308,14 +308,30 @@ export class MCPAgent {
 
     try {
       switch (tool) {
-        case 'rag_recall':
-        case 'rag_query_playbooks': {
-          // The RAG client uses 'recall' method which takes observation
+        case 'rag_recall': {
+          // Queries the anti_patterns collection
           const observation = (args.query || args.observation) as string;
           const topK = (args.top_k as number) || 3;
 
           const result = await this.ragMemoryClient.recall({
             observation,
+            top_k: topK,
+          });
+
+          return {
+            success: result.success,
+            output: JSON.stringify(result),
+            error: result.message && !result.success ? result.message : undefined,
+          };
+        }
+
+        case 'rag_query_playbooks': {
+          // Queries the playbooks collection via dedicated MCP tool
+          const query = (args.query || args.observation) as string;
+          const topK = (args.top_k as number) || 3;
+
+          const result = await (this.ragMemoryClient as any).callTool('rag_query_playbooks', {
+            query,
             top_k: topK,
           });
 

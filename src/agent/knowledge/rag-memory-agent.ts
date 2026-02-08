@@ -92,30 +92,20 @@ export class RAGMemoryAgent {
     },
     topK: number = 3
   ): Promise<RAGMemoryResult> {
-    // Build query text from intelligence context
-    const queryParts: string[] = [];
-
-    if (context.services && context.services.length > 0) {
-      queryParts.push(`services: ${context.services.join(', ')}`);
-    }
-
-    if (context.cves && context.cves.length > 0) {
-      queryParts.push(`vulnerabilities: ${context.cves.join(', ')}`);
-    }
-
-    if (context.profile) {
-      queryParts.push(`target: ${context.profile}`);
-    }
-
-    const queryText = queryParts.length > 0 ? queryParts.join(' | ') : 'general exploitation';
+    // Build a natural-language query for ChromaDB vector similarity search.
+    // Anti-patterns are indexed with descriptions like:
+    //   "Web server found. HTTP directory enumeration needed."
+    //   "SSH service found. Port 22 open. Remote shell access."
+    // The query must read like natural language to match these embeddings.
+    const queryText = this.buildSemanticQuery(context);
 
     console.log(`[RAG Memory] Query: ${queryText}`);
 
-    // Query for playbooks (successful techniques)
-    const playbooks = await this.queryPlaybooks(queryText, topK);
-
-    // Query for anti-patterns (failed exploits)
-    const antiPatterns = await this.queryAntiPatterns(queryText, topK);
+    // Query playbooks and anti-patterns in parallel (independent collections)
+    const [playbooks, antiPatterns] = await Promise.all([
+      this.queryPlaybooks(queryText, topK),
+      this.queryAntiPatterns(queryText, topK),
+    ]);
 
     // Format for Reasoner injection
     const formattedText = this.formatForInjection(playbooks, antiPatterns);
@@ -132,7 +122,10 @@ export class RAGMemoryAgent {
   /**
    * Query for security playbooks (successful techniques).
    *
-   * @param queryText - Query string
+   * Uses the rag_query_playbooks MCP tool which queries the playbooks
+   * collection in ChromaDB via semantic similarity search.
+   *
+   * @param queryText - Query string (semantic, e.g., "lighttpd web server Linux")
    * @param topK - Number of results
    * @returns Array of playbook documents
    */
@@ -143,7 +136,6 @@ export class RAGMemoryAgent {
         arguments: {
           query: queryText,
           top_k: topK,
-          type: 'playbook',
         },
         description: 'Query RAG memory for successful exploitation playbooks',
       });
@@ -162,18 +154,20 @@ export class RAGMemoryAgent {
   /**
    * Query for anti-patterns (failed exploits with alternatives).
    *
-   * @param queryText - Query string
+   * Uses the rag_recall MCP tool which queries the anti_patterns collection
+   * in ChromaDB via semantic similarity search.
+   *
+   * @param queryText - Query string (semantic, e.g., "HTTP web server lighttpd")
    * @param topK - Number of results
    * @returns Array of anti-pattern documents
    */
   private async queryAntiPatterns(queryText: string, topK: number): Promise<RAGMemoryDocument[]> {
     try {
       const result = await this.mcpAgent.executeTool({
-        tool: 'rag_query_playbooks',
+        tool: 'rag_recall',
         arguments: {
-          query: queryText,
+          observation: queryText,
           top_k: topK,
-          type: 'anti_pattern',
         },
         description: 'Query RAG memory for anti-patterns and warnings',
       });
@@ -300,5 +294,75 @@ export class RAGMemoryAgent {
     }
 
     return sections.join('\n');
+  }
+
+  /**
+   * Build a natural-language query from intelligence context.
+   *
+   * Converts raw service names and profile data into a sentence-like query
+   * that matches how anti-patterns are embedded in ChromaDB.
+   *
+   * Examples:
+   *   Input:  services=["http","lighttpd"], profile="Linux"
+   *   Output: "Web server found. HTTP service detected. lighttpd web server on Linux target."
+   *
+   *   Input:  services=["ssh"], profile="Linux OpenSSH"
+   *   Output: "SSH service found. Port 22 remote access. Linux OpenSSH target."
+   *
+   * @param context - Intelligence context with services and profile
+   * @returns Natural-language query string for semantic search
+   */
+  private buildSemanticQuery(context: {
+    services?: string[];
+    cves?: string[];
+    profile?: string;
+  }): string {
+    const parts: string[] = [];
+
+    if (context.services && context.services.length > 0) {
+      // Map service names to natural-language descriptions that match seed embeddings
+      const serviceDescriptions: Record<string, string> = {
+        http: 'Web server found. HTTP service detected.',
+        https: 'HTTPS web server with SSL/TLS.',
+        ssh: 'SSH service found. Port 22 open. Remote shell access available.',
+        ftp: 'FTP file transfer service found.',
+        smb: 'SMB service found. Windows file sharing. CIFS detected.',
+        'microsoft-ds': 'SMB service found. Port 445 open. Windows file sharing.',
+        mysql: 'MySQL database service found.',
+        postgresql: 'PostgreSQL database service found.',
+        redis: 'Redis cache service found.',
+        smtp: 'SMTP email service found.',
+        rdp: 'RDP remote desktop service found. Port 3389 open.',
+        telnet: 'Telnet service found. Unencrypted remote access.',
+        ldap: 'LDAP directory service found. Active Directory possible.',
+        kerberos: 'Kerberos authentication service found. Domain controller possible.',
+        domain: 'DNS domain service found.',
+        vnc: 'VNC remote desktop service found.',
+      };
+
+      for (const svc of context.services) {
+        const svcLower = svc.toLowerCase();
+        // Check for known descriptions
+        const desc = serviceDescriptions[svcLower];
+        if (desc) {
+          parts.push(desc);
+        } else if (svcLower.includes('http') || svcLower.includes('web')) {
+          parts.push(`Web server found. ${svc} service detected.`);
+        } else if (!svcLower.includes('ssl') && !svcLower.includes('?')) {
+          // Skip noise like "ssl/https?" — add product names directly
+          parts.push(`${svc} service detected.`);
+        }
+      }
+    }
+
+    if (context.profile) {
+      parts.push(`${context.profile} target.`);
+    }
+
+    if (parts.length === 0) {
+      return 'Network reconnaissance. Initial target discovery. Unknown services.';
+    }
+
+    return parts.join(' ');
   }
 }

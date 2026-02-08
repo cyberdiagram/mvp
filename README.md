@@ -2,16 +2,16 @@
 
 ![Visitors](https://api.visitorbadge.io/api/visitors?path=flashoop/mvp&label=VISITORS&countColor=%23263238)
 
-> **Last Updated:** 2026-02-07
-> **Architecture Version:** 2.0 (Layered Architecture Refactoring)
-> **Latest Feature:** Layered Architecture - Intelligence/Knowledge/Execution Separation (2026-02-07)
+> **Last Updated:** 2026-02-08
+> **Architecture Version:** 2.1 (Agent Loop Hardening)
+> **Latest Feature:** Executor Tool Whitelist, Failure Feedback Loop, Service Deduplication, Fingerprint Parsing Skills (2026-02-08)
 
 An AI-powered penetration testing agent using Claude AI with a hierarchical multi-agent architecture, Intelligence Layer for target profiling, Evaluation Loop for continuous improvement, and RAG Memory System that queries security playbooks (successful techniques) and anti-patterns (failed exploits) from past experiences.
 
 ## Architecture
 
-**Version**: 2.0 (Layered Architecture)
-**Last Updated**: 2026-02-07
+**Version**: 2.1 (Agent Loop Hardening)
+**Last Updated**: 2026-02-08
 
 ### Overview
 
@@ -65,7 +65,7 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
                     └──────────────────────────────┘
 ```
 
-**Key Features (v2.0)**:
+**Key Features (v2.1)**:
 - ✅ **Layered Architecture**: 5 layers (core, intelligence, knowledge, execution, utils)
 - ✅ **Incremental Intelligence**: Only analyzes NEW services, merges results intelligently
 - ✅ **Retry Mechanism**: Exponential backoff (max 2 retries) for transient failures
@@ -74,19 +74,24 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
 - ✅ **CVE Deduplication**: Intelligent vulnerability merging across iterations
 - ✅ **Service Fingerprinting**: Tracks analyzed services to prevent duplicate work
 - ✅ **~420 Lines of JSDoc**: Comprehensive documentation for all methods
+- ✅ **Tactical Plan Passthrough**: Executor uses Reasoner's tactical plan directly, bypassing LLM re-planning
+- ✅ **Tool Whitelist Enforcement**: `ALLOWED_TOOLS` Set + post-LLM validation prevents hallucinated tools
+- ✅ **Explicit Failure Feedback**: Failed tool executions are reported to Reasoner with actionable context
+- ✅ **Service Deduplication**: `host:port` dedup in execution loop prevents context bloat
+- ✅ **Fingerprint Parsing Skills**: Dynamic skill injection into DataCleaner for technology identification
 
 ### Layered Architecture Components
 
 | Layer | Agent | Model | Purpose |
 |-------|-------|-------|---------|
-| **Core** | Orchestrator | - | Main coordinator (1,117 lines, 8 phases + 2 utilities) |
+| **Core** | Orchestrator | - | Main coordinator (1,360 lines, 8 phases + 2 utilities) |
 | **Intelligence** | Reasoner | Sonnet 4 | **STRATEGIC** planning - decides WHAT to do and WHY |
 | **Intelligence** | Profiler | Haiku 3.5 | Target profiling (OS, tech stack, security posture) |
 | **Knowledge** | VulnLookup | - | Exploit research via SearchSploit MCP (offline CVE database) |
 | **Knowledge** | RAG Memory | - | Retrieves playbooks & anti-patterns from past penetration tests |
-| **Execution** | Executor | Haiku 4.5 | **TACTICAL** execution - decides HOW (tool selection, 1-N steps) |
+| **Execution** | Executor | Haiku 4.5 | **TACTICAL** execution - decides HOW (tool whitelist + plan passthrough) |
 | **Execution** | MCP Agent | - | Executes security tools via 3 MCP servers (Nmap, SearchSploit, RAG) |
-| **Execution** | Data Cleaner | Haiku 4.5 | Parses & enriches output (service categorization + confidence) |
+| **Execution** | Data Cleaner | Haiku 4.5 | Parses & enriches output (skill-injected fingerprinting + confidence) |
 | **Utilities** | Skills Loader | - | Dynamic skill loading + Memory Manager (tool preferences) |
 | **Utilities** | Token Monitor | - | Tracks token consumption and costs per agent/model |
 | **Utilities** | Session Logger | - | JSONL logging for RAG Memory ETL pipeline (training data) |
@@ -184,7 +189,8 @@ src/
 │   ├── agent-config.ts            # Environment configuration
 │   └── agent_rules.json            # Memory Manager rules (persistent)
 ├── skills/
-│   └── nmap_skill.md               # Skill document
+│   ├── nmap_skill.md               # Nmap reconnaissance skill
+│   └── fingerprint_parsing_skill.md # Technology fingerprinting rules (pfSense, WebLogic, etc.)
 └── agent/
     ├── index.ts                    # Main agent barrel export
     │
@@ -890,6 +896,33 @@ const transport = new SSEClientTransport(new URL('https://your-mcp-server.com/ss
 
 ## Changelog
 
+### 2026-02-08 - Agent Loop Hardening & Fingerprint Parsing Skills (v2.1)
+
+**Executor-Reasoner Feedback Fixes:**
+- **✅ Tactical Plan Passthrough**: Executor checks `reasonerOutput.tactical_plan` first; if the Reasoner provided structured attack vectors, they are used directly — bypassing the LLM call entirely. Eliminates hallucinated tool names.
+- **✅ Tool Whitelist Enforcement**: New `ALLOWED_TOOLS` Set (9 tools across Nmap/SearchSploit/RAG) with strict system prompt constraint + post-LLM validation in `parsePlan()`. Hallucinated tools like `vulnerability_research` are filtered with warning logs.
+- **✅ Explicit Failure Feedback**: `_runToolExecutionLoop` now returns `{ results, failures }`. `_prepareNextObservation` includes failure reports (e.g., "WARNING — 3 tool(s) FAILED") so the Reasoner never misinterprets failed iterations as success.
+- **✅ Service Deduplication**: Services are deduplicated by `host:port` during extraction, keeping the entry with more detail (product/version). Prevents context bloat from redundant scans.
+
+**Fingerprint Parsing Skills (DataCleaner Enhancement):**
+- **✅ Skill Injection**: `DataCleanerAgent` now supports `setSkillContext()` (mirrors ReasonerAgent pattern). Skill context is appended to the LLM system prompt during fallback parsing.
+- **✅ `fingerprint_parsing_skill.md`**: New skill file with identification rules for 15+ technologies:
+  - Network appliances: pfSense, FortiGate, MikroTik
+  - Middleware: WebLogic, Tomcat, JBoss/WildFly
+  - CMS: WordPress, Joomla
+  - Databases: Redis, Elasticsearch, MongoDB
+  - ICS: Modbus, Siemens S7
+  - Remote management: iLO, iDRAC, IPMI, VMware ESXi
+- **✅ Orchestrator Wiring**: Skills loaded and injected into both Reasoner and DataCleaner during `initialize()`
+
+**Code Metrics:**
+- Orchestrator: 1,117 → 1,360 lines (failure tracking, deduplication, skill wiring)
+- Executor: 236 → 311 lines (whitelist, plan passthrough, validation)
+- DataCleaner: 453 → 474 lines (skill injection)
+- New: `fingerprint_parsing_skill.md` (156 lines)
+
+---
+
 ### 2026-02-07 - Intelligence Phase Robustness & Orchestrator Refactoring
 
 **Intelligence Layer Improvements:**
@@ -1063,8 +1096,8 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 
 ## Implementation Status
 
-**Architecture Version**: 2.0 (Layered)
-**Completion**: Phase 1-7 ✅ Complete
+**Architecture Version**: 2.1 (Agent Loop Hardening)
+**Completion**: Phase 1-7 ✅ Complete + Agent Loop Hardening ✅
 
 ### Summary (Phase 1-7)
 
@@ -1079,7 +1112,14 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 | **Phase 6** | Evaluator Agent | ✅ Complete | TP/FP/FN/TN labeling, prediction comparison, training data generation |
 | **Phase 7** | Orchestrator Integration | ✅ Complete | Parallel intelligence execution, RAG memory recall, evaluation loop, training data persistence |
 
-### Recent Enhancements (2026-02-07)
+### Recent Enhancements (2026-02-08)
+
+**Agent Loop Hardening (v2.1)**:
+- ✅ **Tactical Plan Passthrough**: Executor uses Reasoner's tactical plan directly, bypassing redundant LLM call
+- ✅ **Tool Whitelist**: `ALLOWED_TOOLS` Set + post-LLM validation filters hallucinated tool names
+- ✅ **Explicit Failure Feedback**: Failed tools reported to Reasoner with "WARNING — N tool(s) FAILED" context
+- ✅ **Service Deduplication**: `host:port` dedup prevents context bloat from redundant scans
+- ✅ **Fingerprint Parsing Skills**: Dynamic skill injection into DataCleaner for technology identification (15+ rules)
 
 **Layered Architecture Refactoring (v2.0)**:
 - ✅ Migrated from flat structure to 5-layer architecture (core, intelligence, knowledge, execution, utils)
@@ -1153,14 +1193,14 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 
 ### Code Metrics (Lines of Code)
 
-**✨ Updated for Layered Architecture v2.0 (2026-02-07)**
+**✨ Updated for Agent Loop Hardening v2.1 (2026-02-08)**
 
-#### Core Agent System (5,006 lines total)
+#### Core Agent System (5,527 lines total)
 
-**Core Orchestration Layer** (1,317 lines):
+**Core Orchestration Layer** (1,815 lines):
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/agent/core/orchestrator.ts` | 862 | Main PentestAgent coordinator with Intelligence + Evaluation |
+| `src/agent/core/orchestrator.ts` | 1,360 | Main PentestAgent coordinator with failure tracking + dedup |
 | `src/agent/core/types.ts` | 452 | Global type definitions (agents, intelligence, tactical planning) |
 | `src/agent/core/index.ts` | 3 | Barrel export |
 
@@ -1171,19 +1211,19 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 | `src/agent/intelligence/profiler.ts` | 155 | ProfilerAgent (Haiku 3.5) - Target profiling and risk assessment |
 | `src/agent/intelligence/index.ts` | 4 | Barrel export |
 
-**Knowledge Layer** (676 lines):
+**Knowledge Layer** (753 lines):
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/agent/knowledge/vuln-lookup.ts` | 380 | VulnLookupAgent - Exploit research via SearchSploit MCP |
-| `src/agent/knowledge/rag-memory-agent.ts` | 292 | RAGMemoryAgent - Playbooks & anti-patterns retrieval |
+| `src/agent/knowledge/vuln-lookup.ts` | 381 | VulnLookupAgent - Exploit research via SearchSploit MCP |
+| `src/agent/knowledge/rag-memory-agent.ts` | 368 | RAGMemoryAgent - Playbooks & anti-patterns retrieval |
 | `src/agent/knowledge/index.ts` | 4 | Barrel export |
 
-**Execution Layer** (875 lines):
+**Execution Layer** (1,172 lines):
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/agent/execution/data-cleaner.ts` | 453 | DataCleanerAgent (Haiku 4.5) - Output parsing & enrichment |
-| `src/agent/execution/executor.ts` | 236 | ExecutorAgent (Haiku 4.5) - Tactical breakdown |
-| `src/agent/execution/mcp-agent.ts` | 181 | MCPAgent - Tool execution via MCP protocol |
+| `src/agent/execution/data-cleaner.ts` | 474 | DataCleanerAgent (Haiku 4.5) - Skill-injected parsing & enrichment |
+| `src/agent/execution/executor.ts` | 311 | ExecutorAgent (Haiku 4.5) - Tool whitelist + plan passthrough |
+| `src/agent/execution/mcp-agent.ts` | 382 | MCPAgent - Tool execution via 3 MCP servers |
 | `src/agent/execution/index.ts` | 5 | Barrel export |
 
 **Utility Layer** (848 lines):
@@ -1215,11 +1255,12 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 | `src/agent/intelligence/README.md` | 45 | Intelligence layer documentation (Reasoner, Profiler) |
 | `src/agent/core/README.md` | 38 | Core layer documentation (Orchestrator, Types) |
 
-#### Skills & Knowledge Base (810 lines)
+#### Skills & Knowledge Base (968 lines)
 | File | Lines | Purpose |
 |------|-------|---------|
 | `src/skills/nmap_skill.md` | 805 | Nmap expertise and best practices |
-| `src/config/agent_rules.json` | 5 | Memory Manager persistent rules |
+| `src/skills/fingerprint_parsing_skill.md` | 156 | Technology fingerprinting rules (pfSense, WebLogic, etc.) |
+| `src/config/agent_rules.json` | 7 | Memory Manager persistent rules |
 
 #### Project Documentation (1,254 lines)
 | File | Lines | Purpose |
@@ -1236,14 +1277,15 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 
 ---
 
-**Total Project Size**: **7,368 lines** of code and documentation
+**Total Project Size**: **~8,000 lines** of code and documentation
 
 **Architecture Breakdown**:
 - **5 Layers**: Core, Intelligence, Knowledge, Execution, Utils
 - **8 AI Agents**: Reasoner, Profiler, VulnLookup, RAG, Executor, MCP, DataCleaner, Evaluator
 - **3 Claude Models**: Sonnet 4 (strategic), Haiku 4.5 (tactical), Haiku 3.5 (profiling/evaluation)
-- **4 Major Systems**: Intelligence Layer, Evaluation Loop, RAG Memory, Skills System
+- **5 Major Systems**: Intelligence Layer, Evaluation Loop, RAG Memory, Skills System, Tool Whitelist
 - **20+ TypeScript interfaces** for type-safe agent communication
+- **2 Skill Documents**: Nmap reconnaissance (805 lines), Fingerprint parsing (156 lines)
 - **5 Layer READMEs** documenting architecture and data flow
 - **2 Utility Components**: TokenMonitor (cost tracking), SessionLogger (JSONL logging)
 

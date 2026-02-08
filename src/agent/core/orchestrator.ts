@@ -103,6 +103,13 @@ export class PentestAgent {
   private analyzedServiceFingerprints: Set<string> = new Set();
 
   /**
+   * DEBUG SWITCH: When true, prevents anti-pattern content from being injected
+   * into the Reasoner's prompt. Playbook injection is unaffected.
+   * Set to false to restore normal behavior after testing.
+   */
+  private debugDisableAntiPatternInjection: boolean = true;
+
+  /**
    * Creates a new PentestAgent with all subagents.
    *
    * @param config - Configuration object containing:
@@ -147,11 +154,13 @@ export class PentestAgent {
   async initialize(): Promise<void> {
     console.log('[Orchestrator] Initializing multi-agent system...');
 
-    // Load skills
+    // Load skills and inject into agents
     await this.skillsLoader.loadSkills();
     const skillContext = this.skillsLoader.buildSkillContext('reconnaissance pentest');
     this.reasoner.setSkillContext(skillContext);
-    console.log('[Orchestrator] ✓ Skills loaded');
+    const parsingSkills = this.skillsLoader.buildSkillContext('fingerprint parsing');
+    this.dataCleaner.setSkillContext(parsingSkills);
+    console.log('[Orchestrator] ✓ Skills loaded (Reasoner + DataCleaner)');
 
     // Initialize MCP Agent
     await this.mcpAgent.initialize({
@@ -160,8 +169,12 @@ export class PentestAgent {
     console.log('[Orchestrator] ✓ MCP Agent initialized');
 
     console.log('[Orchestrator] Ready!');
-    console.log('[Orchestrator] Core Agents: Reasoner (Sonnet 4), Executor (Haiku 4.5), MCP Agent, Data Cleaner (Haiku 4.5)');
-    console.log('[Orchestrator] Intelligence Layer: Profiler (Haiku 3.5), VulnLookup (SearchSploit MCP)');
+    console.log(
+      '[Orchestrator] Core Agents: Reasoner (Sonnet 4), Executor (Haiku 4.5), MCP Agent, Data Cleaner (Haiku 4.5)'
+    );
+    console.log(
+      '[Orchestrator] Intelligence Layer: Profiler (Haiku 3.5), VulnLookup (SearchSploit MCP)'
+    );
     if (this.ragMemory) {
       console.log('[Orchestrator] RAG Memory: Enabled (Playbooks + Anti-Patterns)');
     }
@@ -258,6 +271,9 @@ export class PentestAgent {
     }
 
     console.log('\n[RAG Memory] Querying past experience...');
+    console.log(
+      `[RAG Memory] Observation: ${observation.substring(0, 150)}${observation.length > 1000 ? '...' : ''}`
+    );
 
     try {
       const memoryRecall = await this.mcpAgent.executeTool({
@@ -267,8 +283,30 @@ export class PentestAgent {
       });
 
       if (memoryRecall.success && memoryRecall.output) {
-        console.log('[RAG Memory] ✓ Injecting warnings into Reasoner context');
-        this.reasoner.injectMemoryContext(memoryRecall.output);
+        try {
+          const parsed = JSON.parse(memoryRecall.output);
+          console.log(`[RAG Memory] ✓ Matches: ${parsed.matches || 0}`);
+          if (parsed.patterns && parsed.patterns.length > 0) {
+            parsed.patterns.forEach((p: any, i: number) => {
+              console.log(
+                `[RAG Memory]   ${i + 1}. [${p.id}] score=${p.relevance_score?.toFixed(3)} keywords="${p.trigger_keywords}"`
+              );
+            });
+          }
+        } catch {
+          // Non-JSON output, just log success
+        }
+        console.log(
+          `[RAG Memory] Output: ${memoryRecall.output.substring(0, 300)}${memoryRecall.output.length > 300 ? '...' : ''}`
+        );
+        if (this.debugDisableAntiPatternInjection) {
+          console.log('[RAG Memory] ⚠ DEBUG: Anti-pattern injection SKIPPED (debugDisableAntiPatternInjection=true)');
+        } else {
+          console.log('[RAG Memory] ✓ Injecting warnings into Reasoner context');
+          this.reasoner.injectMemoryContext(memoryRecall.output);
+        }
+      } else {
+        console.log('[RAG Memory] No matches found');
       }
     } catch (err) {
       console.log('[RAG Memory] ⚠ Failed (continuing without memory):', err);
@@ -296,11 +334,6 @@ export class PentestAgent {
 
     console.log(`[Reasoner] Thought: ${reasoning.thought}`);
     console.log(`[Reasoner] Action: ${reasoning.action}`);
-
-    // Display Tactical Plan if present
-    if (reasoning.tactical_plan) {
-      this.displayTacticalPlan(reasoning.tactical_plan);
-    }
 
     return reasoning;
   }
@@ -354,17 +387,21 @@ export class PentestAgent {
    * 2. DataCleanerAgent parses raw output into structured JSON
    * 3. Extracts discovered services for intelligence layer
    *
+   * Tracks both successes and failures so the Reasoner receives accurate
+   * feedback about what actually happened during execution.
+   *
    * @param plan - Execution plan from Executor
    * @param allDiscoveredServices - Array to append discovered services to
-   * @returns Array of cleaned results from all executed steps
+   * @returns Object with cleaned results and failure details
    *
    * @private
    */
   private async _runToolExecutionLoop(
     plan: ExecutorPlan,
     allDiscoveredServices: DiscoveredService[]
-  ): Promise<CleanedData[]> {
+  ): Promise<{ results: CleanedData[]; failures: Array<{ tool: string; error: string }> }> {
     const results: CleanedData[] = [];
+    const failures: Array<{ tool: string; error: string }> = [];
     let currentPlan = { ...plan };
 
     while (true) {
@@ -384,24 +421,51 @@ export class PentestAgent {
         console.log(`[Data Cleaner] ✓ Type: ${cleanedData.type}`);
         console.log(`[Data Cleaner] Summary: ${cleanedData.summary}`);
 
-        // Extract discovered services if present
+        // Extract discovered services if present, deduplicating by host:port.
+        // When a duplicate is found, keep the entry with more detail (product/version).
         if (Array.isArray(cleanedData.data)) {
           const services = cleanedData.data as DiscoveredService[];
           if (services.length > 0 && 'host' in services[0]) {
-            allDiscoveredServices.push(...services);
-            console.log(`[Data Cleaner] ✓ Extracted ${services.length} services`);
+            let added = 0;
+            for (const s of services) {
+              const key = `${s.host}:${s.port}`;
+              const existingIdx = allDiscoveredServices.findIndex(
+                (existing) => `${existing.host}:${existing.port}` === key,
+              );
+              if (existingIdx === -1) {
+                allDiscoveredServices.push(s);
+                added++;
+              } else {
+                // Replace if new entry has more detail (product/version info)
+                const existing = allDiscoveredServices[existingIdx];
+                if (!existing.product && s.product) {
+                  allDiscoveredServices[existingIdx] = s;
+                  console.log(`[Data Cleaner] ↻ Updated ${key} with enriched data`);
+                }
+              }
+            }
+            console.log(
+              `[Data Cleaner] ✓ Extracted ${services.length} services (${added} new, ${services.length - added} deduplicated)`,
+            );
+            services.forEach((s, i) => {
+              const product = s.product ? `${s.product} ${s.version || ''}`.trim() : 'unknown';
+              console.log(
+                `[Data Cleaner]   ${i + 1}. ${s.host}:${s.port} ${s.service} | product=${product} | category=${s.category} | criticality=${s.criticality} | confidence=${s.confidence}`,
+              );
+            });
           }
         }
 
         results.push(cleanedData);
       } else {
         console.log(`[MCP Agent] ✗ Execution failed: ${rawResult.error}`);
+        failures.push({ tool: step.tool, error: rawResult.error || 'Unknown error' });
       }
 
       currentPlan = this.executor.advancePlan(currentPlan);
     }
 
-    return results;
+    return { results, failures };
   }
 
   /**
@@ -575,21 +639,19 @@ export class PentestAgent {
     console.log('\n[RAG Memory] Querying past experiences...');
 
     try {
-      // Extract service names and CVEs for query
-      const serviceNames = services
-        .map((s) => s.product || s.service)
-        .filter((s) => s !== 'unknown');
-      const cves = vulnerabilities.map((v) => v.cve_id);
+      // Extract service names for query (deduplicated, concise for semantic search)
+      const serviceNames = [
+        ...new Set(services.map((s) => s.product || s.service).filter((s) => s !== 'unknown')),
+      ];
       const profileStr = profile
-        ? `${profile.os_family} ${profile.tech_stack?.join(' ')}`
+        ? `${profile.os_family || ''} ${profile.tech_stack?.join(' ') || ''}`.trim()
         : undefined;
 
-      // Query RAG memory
+      // Query RAG memory (only services + profile, no CVE flood)
       const ragResult = await this.ragMemory.queryMemory(
         {
           services: serviceNames.length > 0 ? serviceNames : undefined,
-          cves: cves.length > 0 ? cves : undefined,
-          profile: profileStr,
+          profile: profileStr || undefined,
         },
         3 // Top 3 results per type
       );
@@ -599,9 +661,24 @@ export class PentestAgent {
           `[RAG Memory] ✓ Found ${ragResult.playbooks.length} playbooks, ${ragResult.antiPatterns.length} anti-patterns`
         );
 
-        // Inject RAG context into Reasoner
-        this.reasoner.injectMemoryContext(ragResult.formattedText);
-        console.log('[RAG Memory] ✓ Context injected into Reasoner');
+        if (this.debugDisableAntiPatternInjection && ragResult.antiPatterns.length > 0) {
+          console.log('[RAG Memory] ⚠ DEBUG: Anti-pattern injection SKIPPED (debugDisableAntiPatternInjection=true)');
+        }
+
+        // Inject RAG context into Reasoner (filter out anti-patterns if debug flag is set)
+        const textToInject = this.debugDisableAntiPatternInjection
+          ? ragResult.formattedText.replace(
+              /\[MEMORY RECALL - WARNINGS FROM PAST EXPERIENCE\][\s\S]*?\[END MEMORY RECALL\]\n*/,
+              ''
+            )
+          : ragResult.formattedText;
+
+        if (textToInject.trim()) {
+          this.reasoner.injectMemoryContext(textToInject);
+          console.log('[RAG Memory] ✓ Context injected into Reasoner');
+        } else {
+          console.log('[RAG Memory] No content to inject (anti-patterns filtered, no playbooks)');
+        }
       } else {
         console.log('[RAG Memory] No relevant memories found');
       }
@@ -638,12 +715,7 @@ export class PentestAgent {
   ): Promise<void> {
     // Evaluation loop (if enabled)
     if (this.config.enableEvaluation && reasoning.tactical_plan) {
-      await this.runEvaluationLoop(
-        reasoning.tactical_plan,
-        intelligence,
-        cleanedData,
-        iteration
-      );
+      await this.runEvaluationLoop(reasoning.tactical_plan, intelligence, cleanedData, iteration);
     }
 
     // Session logging for RAG ETL pipeline
@@ -670,13 +742,29 @@ export class PentestAgent {
    *
    * @private
    */
-  private _prepareNextObservation(lastResult: CleanedData | null): string {
-    if (!lastResult) {
-      return 'No tools to execute. Continue with analysis or indicate completion.';
+  private _prepareNextObservation(
+    lastResult: CleanedData | null,
+    failures?: Array<{ tool: string; error: string }>,
+  ): string {
+    const hasFailures = failures && failures.length > 0;
+
+    if (!lastResult && !hasFailures) {
+      return 'No executable steps were generated. The Executor could not map the requested action to available tools. Reassess the strategy using only available tools: nmap_*, searchsploit_*, rag_*.';
     }
 
-    if (lastResult.intelligence) {
-      const intel = lastResult.intelligence;
+    // Build failure report if any tools failed
+    let failureReport = '';
+    if (hasFailures) {
+      const failureLines = failures!.map((f) => `  - ${f.tool}: ${f.error}`).join('\n');
+      failureReport = `\n\nWARNING — ${failures!.length} tool(s) FAILED:\n${failureLines}\nThese actions were NOT completed. Do NOT assume their results are available.`;
+    }
+
+    if (!lastResult && hasFailures) {
+      return `ALL tool executions failed this iteration. No new data was collected.${failureReport}`;
+    }
+
+    if (lastResult!.intelligence) {
+      const intel = lastResult!.intelligence;
       let obs = `Tool execution completed.\n\nDiscovered Services: ${intel.discoveredServices.length} services found`;
 
       if (intel.targetProfile) {
@@ -684,14 +772,18 @@ export class PentestAgent {
       }
 
       if (intel.vulnerabilities.length > 0) {
-        obs += `\n\nVulnerabilities Found: ${intel.vulnerabilities.length}\nTop CVEs: ${intel.vulnerabilities.slice(0, 3).map((v) => v.cve_id).join(', ')}`;
+        obs += `\n\nVulnerabilities Found: ${intel.vulnerabilities.length}\nTop CVEs: ${intel.vulnerabilities
+          .slice(0, 3)
+          .map((v) => v.cve_id)
+          .join(', ')}`;
       }
 
-      obs += `\n\nSummary: ${lastResult.summary}`;
+      obs += `\n\nSummary: ${lastResult!.summary}`;
+      obs += failureReport;
       return obs;
     }
 
-    return `Tool execution completed. ${lastResult.summary}`;
+    return `Tool execution completed. ${lastResult!.summary}${failureReport}`;
   }
 
   // ============================================================================
@@ -730,6 +822,7 @@ export class PentestAgent {
     let allDiscoveredServices: DiscoveredService[] = [];
     let currentIntelligence: IntelligenceContext | null = null;
     let observation = `Starting reconnaissance mission on target: ${target}`;
+    let lastTacticalPlan: TacticalPlanObject | null = null;
 
     // ========================================================================
     // MAIN RECONNAISSANCE LOOP
@@ -747,6 +840,11 @@ export class PentestAgent {
       // PHASE 1: Strategic Reasoning
       // ======================================================================
       const reasoning = await this._runReasoningPhase(observation);
+
+      // Store tactical plan if present (displayed after all iterations)
+      if (reasoning.tactical_plan) {
+        lastTacticalPlan = reasoning.tactical_plan;
+      }
 
       // Check if mission is complete
       if (reasoning.is_complete) {
@@ -769,7 +867,8 @@ export class PentestAgent {
       // ======================================================================
       // PHASE 3: Tool Execution and Data Cleaning
       // ======================================================================
-      const executionResults = await this._runToolExecutionLoop(plan, allDiscoveredServices);
+      const { results: executionResults, failures: executionFailures } =
+        await this._runToolExecutionLoop(plan, allDiscoveredServices);
       aggregatedResults.push(...executionResults);
 
       // Get the last result for next observation
@@ -804,7 +903,7 @@ export class PentestAgent {
       // ======================================================================
       // PHASE 6: Prepare Next Observation
       // ======================================================================
-      observation = this._prepareNextObservation(lastResult);
+      observation = this._prepareNextObservation(lastResult, executionFailures);
       this.reasoner.addObservation(observation);
 
       // Small delay between iterations to avoid overwhelming the system
@@ -829,11 +928,18 @@ export class PentestAgent {
       });
     }
 
+    // Display Tactical Plan after all iterations are complete
+    if (lastTacticalPlan) {
+      this.displayTacticalPlan(lastTacticalPlan);
+    }
+
     // Print evaluation summary
     if (this.config.enableEvaluation) {
       console.log('\n[Orchestrator] === Evaluation Summary ===');
       console.log(`[Orchestrator] Session ID: ${this.sessionId}`);
-      console.log(`[Orchestrator] Training pairs collected: ${this.trainingPairs.length === 0 ? 'saved' : 'pending save'}`);
+      console.log(
+        `[Orchestrator] Training pairs collected: ${this.trainingPairs.length === 0 ? 'saved' : 'pending save'}`
+      );
     }
   }
 
@@ -885,7 +991,9 @@ export class PentestAgent {
           toolResult.output
         );
 
-        console.log(`[Evaluation Loop] ✓ Label: ${evaluation.label} (confidence: ${evaluation.confidence})`);
+        console.log(
+          `[Evaluation Loop] ✓ Label: ${evaluation.label} (confidence: ${evaluation.confidence})`
+        );
         console.log(`[Evaluation Loop] Reasoning: ${evaluation.reasoning}`);
 
         // Create training pair
@@ -907,10 +1015,14 @@ export class PentestAgent {
         };
 
         this.trainingPairs.push(trainingPair);
-        console.log(`[Evaluation Loop] ✓ Training pair collected (total: ${this.trainingPairs.length})`);
+        console.log(
+          `[Evaluation Loop] ✓ Training pair collected (total: ${this.trainingPairs.length})`
+        );
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.log(`[Evaluation Loop] ⚠ Failed to evaluate vector ${vector.vector_id}: ${errorMessage}`);
+        console.log(
+          `[Evaluation Loop] ⚠ Failed to evaluate vector ${vector.vector_id}: ${errorMessage}`
+        );
       }
     }
 
@@ -948,7 +1060,9 @@ export class PentestAgent {
       // Write training pairs to file
       await fs.writeFile(filepath, JSON.stringify(this.trainingPairs, null, 2), 'utf-8');
 
-      console.log(`[Training Data] ✓ Saved ${this.trainingPairs.length} training pairs to ${filename}`);
+      console.log(
+        `[Training Data] ✓ Saved ${this.trainingPairs.length} training pairs to ${filename}`
+      );
 
       // Clear training pairs after saving
       this.trainingPairs = [];
@@ -1107,8 +1221,12 @@ export class PentestAgent {
     console.log('[Tactical Plan] ───────────────────────────────────────────────────────');
 
     plan.attack_vectors.forEach((vector, index) => {
-      console.log(`\n[Tactical Plan] Vector ${index + 1}/${plan.attack_vectors.length}: ${vector.vector_id}`);
-      console.log(`[Tactical Plan]   Priority: ${vector.priority} (${vector.priority === 1 ? 'HIGHEST' : vector.priority <= 3 ? 'HIGH' : 'MEDIUM'})`);
+      console.log(
+        `\n[Tactical Plan] Vector ${index + 1}/${plan.attack_vectors.length}: ${vector.vector_id}`
+      );
+      console.log(
+        `[Tactical Plan]   Priority: ${vector.priority} (${vector.priority === 1 ? 'HIGHEST' : vector.priority <= 3 ? 'HIGH' : 'MEDIUM'})`
+      );
 
       // Action details
       console.log(`[Tactical Plan]   Tool: ${vector.action.tool_name}`);
@@ -1134,9 +1252,7 @@ export class PentestAgent {
       console.log(
         `[Tactical Plan]     - Expected Success: ${pred.hypothesis.expected_success ? '✓ YES' : '✗ NO'}`
       );
-      console.log(
-        `[Tactical Plan]     - Rationale: ${pred.hypothesis.rationale_tags.join(', ')}`
-      );
+      console.log(`[Tactical Plan]     - Rationale: ${pred.hypothesis.rationale_tags.join(', ')}`);
 
       console.log(`[Tactical Plan]   Success Criteria:`);
       console.log(`[Tactical Plan]     - Match Type: ${pred.success_criteria.match_type}`);

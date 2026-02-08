@@ -377,4 +377,5 @@ export class VulnLookupAgent {
       return true;
     });
   }
+
 }
