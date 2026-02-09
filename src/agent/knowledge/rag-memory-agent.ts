@@ -30,6 +30,9 @@ export interface RAGMemoryDocument {
     tags?: string;
     source?: string;
     cve?: string;
+    exploitation_logic?: string;
+    vulnerability_context?: string;
+    is_core_instruction?: boolean;
   };
 }
 
@@ -318,6 +321,9 @@ export class RAGMemoryAgent {
             tags: pattern.trigger_keywords || pattern.metadata?.tags || '',
             source: pattern.metadata?.source,
             cve: pattern.metadata?.cve,
+            exploitation_logic: pattern.metadata?.exploitation_logic,
+            vulnerability_context: pattern.metadata?.vulnerability_context,
+            is_core_instruction: pattern.metadata?.is_core_instruction,
           },
         }));
       }

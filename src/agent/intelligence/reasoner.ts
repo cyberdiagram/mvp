@@ -120,6 +120,13 @@ When planning attacks after service discovery, you MAY optionally include a "tac
             "match_pattern": "(root:|uid=0|vulnerable)",
             "negative_pattern": "(404 Not Found|Connection refused)"
           }
+        },
+        "rag_context": {
+          "payload_snippet": "exact payload from playbook (verbatim syntax)",
+          "insight": "key operational insight from playbook",
+          "exploitation_logic": "bypass technique details (encoding, filter evasion)",
+          "vulnerability_context": "version ranges and config prerequisites",
+          "source": "htb_sense_writeup"
         }
       }
     ],
@@ -128,6 +135,10 @@ When planning attacks after service discovery, you MAY optionally include a "tac
 }
 
 **Important**: Only include tactical_plan when you have specific attack vectors to execute based on discovered vulnerabilities. For reconnaissance phases (host discovery, port scanning, service detection), omit tactical_plan and just use the standard response format.
+
+# RAG Knowledge Integration
+
+When RAG memory context provides playbook knowledge (sections marked with 🎯 payload_snippet, 🔐 insight, 💣 exploitation_logic, or vulnerability_context), extract and include the relevant fields in each attack vector's "rag_context" object. This preserves the exact playbook knowledge (payloads, bypass techniques, version prerequisites) in the structured tactical plan output for downstream consumption. Only include rag_context when RAG playbook data is present and relevant to that specific attack vector.
 
 The prediction_metrics section is used by the Evaluator Agent to measure your accuracy. Be honest about your confidence scores and provide clear success criteria.
 

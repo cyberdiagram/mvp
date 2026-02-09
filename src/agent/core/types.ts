@@ -302,6 +302,19 @@ export interface AttackVector {
   action: AttackAction;
   /** Prediction metrics for evaluation */
   prediction_metrics: PredictionMetrics;
+  /** RAG-sourced knowledge that informed this attack vector */
+  rag_context?: {
+    /** Exact exploit payload from playbook (syntax-preserved) */
+    payload_snippet?: string;
+    /** Critical operational insight */
+    insight?: string;
+    /** Bypass technique / exploitation logic */
+    exploitation_logic?: string;
+    /** Version/config prerequisites */
+    vulnerability_context?: string;
+    /** Source reference (e.g., "htb_sense_writeup") */
+    source?: string;
+  };
 }
 
 /**

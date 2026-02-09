@@ -820,7 +820,7 @@ export class PentestAgent {
     let allDiscoveredServices: DiscoveredService[] = [];
     let currentIntelligence: IntelligenceContext | null = null;
     let observation = `Starting reconnaissance mission on target: ${target}`;
-    let lastTacticalPlan: TacticalPlanObject | null = null;
+    let allTacticalPlans: TacticalPlanObject[] = [];
 
     // ========================================================================
     // MAIN RECONNAISSANCE LOOP (wrapped in Langfuse trace)
@@ -864,9 +864,9 @@ export class PentestAgent {
         });
       });
 
-      // Store tactical plan if present (displayed after all iterations)
+      // Collect every tactical plan (displayed + saved after all iterations)
       if (reasoning.tactical_plan) {
-        lastTacticalPlan = reasoning.tactical_plan;
+        allTacticalPlans.push(reasoning.tactical_plan);
       }
 
       // Check if mission is complete
@@ -1001,9 +1001,12 @@ export class PentestAgent {
       });
     }
 
-    // Display Tactical Plan after all iterations are complete
-    if (lastTacticalPlan) {
-      this.displayTacticalPlan(lastTacticalPlan);
+    // Display and save all Tactical Plans after iterations are complete
+    if (allTacticalPlans.length > 0) {
+      for (const plan of allTacticalPlans) {
+        this.displayTacticalPlan(plan);
+      }
+      await this.saveTacticalPlans(allTacticalPlans, target);
     }
 
     // Print evaluation summary
@@ -1274,70 +1277,50 @@ export class PentestAgent {
   }
 
   /**
-   * Displays a tactical plan in a formatted console output.
-   *
-   * Shows detailed information about attack vectors including:
-   * - Plan metadata (plan_id, target_ip, context_hash)
-   * - Attack vectors with priorities
-   * - Tool details and parameters
-   * - Prediction metrics (attack type, confidence, success criteria)
+   * Displays a tactical plan as formatted JSON in the console.
    *
    * @param plan - The tactical plan object to display
    */
   private displayTacticalPlan(plan: TacticalPlanObject): void {
     console.log('\n[Tactical Plan] ═══════════════════════════════════════════════════');
-    console.log(`[Tactical Plan] Plan ID: ${plan.plan_id}`);
-    console.log(`[Tactical Plan] Target: ${plan.target_ip}`);
-    console.log(`[Tactical Plan] Context Hash: ${plan.context_hash.substring(0, 16)}...`);
-    console.log(`[Tactical Plan] Created: ${new Date(plan.created_at).toLocaleString()}`);
-    console.log(`[Tactical Plan] Attack Vectors: ${plan.attack_vectors.length}`);
-    console.log('[Tactical Plan] ───────────────────────────────────────────────────────');
+    console.log(JSON.stringify(plan, null, 2));
+    console.log('[Tactical Plan] ═══════════════════════════════════════════════════\n');
+  }
 
-    plan.attack_vectors.forEach((vector, index) => {
-      console.log(
-        `\n[Tactical Plan] Vector ${index + 1}/${plan.attack_vectors.length}: ${vector.vector_id}`
-      );
-      console.log(
-        `[Tactical Plan]   Priority: ${vector.priority} (${vector.priority === 1 ? 'HIGHEST' : vector.priority <= 3 ? 'HIGH' : 'MEDIUM'})`
-      );
+  /**
+   * Saves all tactical plans from a recon session to the Tactical/ folder.
+   *
+   * Each plan is saved as an individual JSON file:
+   *   Tactical/{sessionId}_{plan_id}.json
+   *
+   * @param plans - Array of tactical plans collected during reconnaissance
+   * @param target - The target that was scanned (for metadata)
+   */
+  private async saveTacticalPlans(
+    plans: TacticalPlanObject[],
+    target: string
+  ): Promise<void> {
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
 
-      // Action details
-      console.log(`[Tactical Plan]   Tool: ${vector.action.tool_name}`);
-      console.log(`[Tactical Plan]   Command: ${vector.action.command_template}`);
-      console.log(
-        `[Tactical Plan]   Parameters: ${JSON.stringify(vector.action.parameters, null, 2).replace(/\n/g, '\n[Tactical Plan]                   ')}`
-      );
-      console.log(`[Tactical Plan]   Timeout: ${vector.action.timeout_seconds}s`);
+      const tacticalDir = path.resolve('Tactical');
+      await fs.mkdir(tacticalDir, { recursive: true });
 
-      // Prediction metrics
-      const pred = vector.prediction_metrics;
-      console.log(`[Tactical Plan]   Classification:`);
-      console.log(`[Tactical Plan]     - Attack Type: ${pred.classification.attack_type}`);
-      console.log(`[Tactical Plan]     - MITRE ATT&CK: ${pred.classification.mitre_id}`);
-      if (pred.classification.cve_id) {
-        console.log(`[Tactical Plan]     - CVE: ${pred.classification.cve_id}`);
+      for (const plan of plans) {
+        const filename = `${this.sessionId}_${plan.plan_id}.json`;
+        const filepath = path.join(tacticalDir, filename);
+        await fs.writeFile(filepath, JSON.stringify(plan, null, 2), 'utf-8');
+        console.log(`[Tactical Plan] ✓ Saved ${filename}`);
       }
 
-      console.log(`[Tactical Plan]   Hypothesis:`);
       console.log(
-        `[Tactical Plan]     - Confidence: ${(pred.hypothesis.confidence_score * 100).toFixed(1)}%`
+        `[Tactical Plan] ✓ ${plans.length} plan(s) saved to ${tacticalDir}`
       );
-      console.log(
-        `[Tactical Plan]     - Expected Success: ${pred.hypothesis.expected_success ? '✓ YES' : '✗ NO'}`
-      );
-      console.log(`[Tactical Plan]     - Rationale: ${pred.hypothesis.rationale_tags.join(', ')}`);
-
-      console.log(`[Tactical Plan]   Success Criteria:`);
-      console.log(`[Tactical Plan]     - Match Type: ${pred.success_criteria.match_type}`);
-      console.log(`[Tactical Plan]     - Pattern: ${pred.success_criteria.match_pattern}`);
-      if (pred.success_criteria.negative_pattern) {
-        console.log(
-          `[Tactical Plan]     - Negative Pattern: ${pred.success_criteria.negative_pattern}`
-        );
-      }
-    });
-
-    console.log('\n[Tactical Plan] ═══════════════════════════════════════════════════\n');
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.log(`[Tactical Plan] ⚠ Failed to save tactical plans: ${errorMessage}`);
+    }
   }
 
   /**
