@@ -3,7 +3,8 @@
 import { SkillsLoader } from '../utils/skills-loader.js';
 import { ReasonerAgent, ProfilerAgent } from '../intelligence/index.js';
 import { VulnLookupAgent, RAGMemoryAgent } from '../knowledge/index.js';
-import { ExecutorAgent, MCPAgent, DataCleanerAgent } from '../execution/index.js';
+import { ExecutorAgent, DualMCPAgent, AgenticExecutor, DataCleanerAgent } from '../execution/index.js';
+import { SkillManager } from '../utils/skill-manager.js';
 import { EvaluatorAgent } from '../definitions/index.js';
 import {
   CleanedData,
@@ -22,11 +23,10 @@ import { startActiveObservation, propagateAttributes } from '@langfuse/tracing';
 export interface AgentConfig {
   anthropicApiKey: string;
   skillsDir: string;
-  mcpServers: {
-    nmap: { path: string };
-    searchsploit?: { path: string };
-    rag_memory?: { path: string };
-  };
+  /** Kali MCP server URL (HTTP transport, Docker container) */
+  kaliMcpUrl?: string;
+  /** RAG Memory MCP server path (stdio transport, host-local) */
+  ragMemoryServerPath?: string;
   enableEvaluation?: boolean;
   enableRAGMemory?: boolean;
   trainingDataPath?: string;
@@ -73,8 +73,14 @@ export class PentestAgent {
   /** Execution planning agent (Claude Haiku 4.5) */
   private executor: ExecutorAgent;
 
-  /** MCP protocol agent for tool execution */
-  private mcpAgent: MCPAgent;
+  /** MCP protocol agent for tool execution (RAG stdio + Kali HTTP) */
+  private mcpAgent: DualMCPAgent;
+
+  /** Agentic executor for autonomous OODA loop and script generation */
+  public agenticExecutor: AgenticExecutor | null = null;
+
+  /** Unified skill manager (skills + memory) */
+  public skillManager: SkillManager;
 
   /** Data cleaning/parsing agent (Claude Haiku 4.5) */
   private dataCleaner: DataCleanerAgent;
@@ -128,16 +134,17 @@ export class PentestAgent {
   constructor(config: AgentConfig) {
     this.config = config;
     this.skillsLoader = new SkillsLoader(config.skillsDir);
+    this.skillManager = new SkillManager(config.skillsDir);
     this.reasoner = new ReasonerAgent(config.anthropicApiKey);
     this.executor = new ExecutorAgent(config.anthropicApiKey);
-    this.mcpAgent = new MCPAgent();
+    this.mcpAgent = new DualMCPAgent();
     this.dataCleaner = new DataCleanerAgent(config.anthropicApiKey);
     this.profiler = new ProfilerAgent(config.anthropicApiKey);
     this.vulnLookup = new VulnLookupAgent(this.mcpAgent);
     this.evaluator = new EvaluatorAgent(config.anthropicApiKey);
 
     // Initialize RAG Memory agent if enabled
-    if (config.enableRAGMemory && config.mcpServers.rag_memory) {
+    if (config.enableRAGMemory && config.ragMemoryServerPath) {
       this.ragMemory = new RAGMemoryAgent(this.mcpAgent);
     }
 
@@ -166,11 +173,30 @@ export class PentestAgent {
     this.dataCleaner.setSkillContext(parsingSkills);
     console.log('[Orchestrator] ✓ Skills loaded (Reasoner + DataCleaner)');
 
-    // Initialize MCP Agent
+    // Initialize Dual MCP Agent (RAG stdio + Kali HTTP)
     await this.mcpAgent.initialize({
-      servers: this.config.mcpServers,
+      ragMemory: this.config.ragMemoryServerPath
+        ? { path: this.config.ragMemoryServerPath }
+        : undefined,
+      kali: this.config.kaliMcpUrl
+        ? { url: this.config.kaliMcpUrl }
+        : undefined,
     });
-    console.log('[Orchestrator] ✓ MCP Agent initialized');
+    console.log('[Orchestrator] ✓ Dual MCP Agent initialized');
+
+    // Build dynamic tool list from Kali discovery + RAG tools
+    const kaliTools = this.mcpAgent.getKaliToolNames();
+    const allTools = [...kaliTools, 'rag_recall', 'rag_query_playbooks'];
+    this.executor = new ExecutorAgent(this.config.anthropicApiKey, allTools);
+
+    // Initialize AgenticExecutor (autonomous OODA loop)
+    if (this.mcpAgent.isKaliConnected()) {
+      this.agenticExecutor = new AgenticExecutor(this.mcpAgent, this.skillManager);
+      console.log('[Orchestrator] ✓ Agentic Executor initialized');
+    }
+
+    // Load unified skill manager
+    await this.skillManager.loadSkills();
 
     console.log('[Orchestrator] Ready!');
     console.log(

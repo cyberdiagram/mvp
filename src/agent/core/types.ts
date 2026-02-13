@@ -400,6 +400,46 @@ export interface TrainingPair {
   model_version: string;
 }
 
+// ==================== AGENTIC EXECUTOR ====================
+
+/**
+ * Record of a single tool call made during the agentic OODA loop.
+ */
+export interface ToolCallRecord {
+  /** Tool name that was called */
+  name: string;
+  /** Arguments passed to the tool */
+  input: Record<string, unknown>;
+  /** Raw text result from the tool */
+  result: string;
+}
+
+/**
+ * Result returned by the agentic loop after completion.
+ */
+export interface AgentResult {
+  /** Final text response from the agent */
+  finalText: string;
+  /** All tool calls made during the loop */
+  toolCalls: ToolCallRecord[];
+  /** Number of agentic turns used */
+  turnsUsed: number;
+}
+
+/**
+ * Entry in the skill index (derived from YAML frontmatter in skill .md files).
+ */
+export interface SkillIndexEntry {
+  /** Tool name (lowercase, e.g., "wpscan") */
+  tool_name: string;
+  /** Category (e.g., "web_scanner") */
+  category: string;
+  /** Tags for matching */
+  tags: string[];
+  /** Short description */
+  description: string;
+}
+
 // ==================== RAG MEMORY SYSTEM ====================
 
 /**

@@ -23,9 +23,8 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.29",
     "@anthropic-ai/sdk": "^0.72.1",
-    "@cyber/mcp-nmap-client": "file:.yalc/@cyber/mcp-nmap-client",
     "@cyber/mcp-rag-memory-client": "file:.yalc/@cyber/mcp-rag-memory-client",
-    "@cyber/mcp-searchsploit-client": "file:.yalc/@cyber/mcp-searchsploit-client",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "@langfuse/otel": "^4.5.1",
     "@langfuse/tracing": "^4.5.1",
     "@opentelemetry/sdk-node": "^0.211.0",

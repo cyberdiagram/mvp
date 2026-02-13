@@ -1,327 +1,177 @@
 /**
- * MCP Agent - Tool execution layer.
+ * DualMCPAgent - Routes tool execution to 2 MCP servers.
  *
- * Connects to MCP (Model Context Protocol) servers and executes security tools.
- * Supports multiple MCP servers:
- * - Nmap: Network reconnaissance and port scanning
- * - SearchSploit: Exploit database queries
- * - RAG Memory: Security playbooks and anti-patterns retrieval
+ * Connects to:
+ * 1. RAG Memory MCP Server (host, stdio transport) — security playbooks & anti-patterns
+ * 2. Kali MCP Server (Docker container, HTTP transport) — tool execution & information retrieval
  *
- * Routes tool calls from the Executor to the appropriate MCP client.
+ * Replaces the previous 3-server architecture (Nmap, SearchSploit, RAG).
+ * Nmap and SearchSploit are now available inside the Kali container.
  *
- * MCP is a protocol that allows AI agents to safely interact with external tools.
+ * Tool routing:
+ * - rag_* → RAG Memory server (host)
+ * - Everything else → Kali server (Docker)
  */
 
-import { NmapMCPClient } from '@cyber/mcp-nmap-client';
-import { SearchSploitMCPClient } from '@cyber/mcp-searchsploit-client';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { RAGMemoryMCPClient } from '@cyber/mcp-rag-memory-client';
 import { ToolResult, ExecutorStep } from '../core/types.js';
 
 /**
- * MCPAgent - Routes tool execution to MCP servers.
- *
- * Acts as a bridge between the Executor's planned steps and actual
- * security tool execution. Manages connections to MCP servers and
- * handles tool-specific argument mapping.
- *
- * Supported tools:
- * - nmap_*: Network scanning (nmap_host_discovery, nmap_port_scan, nmap_service_detection)
- * - searchsploit_*: Exploit database queries (searchsploit_search, searchsploit_examine)
- * - rag_query_playbooks: Query security playbooks and anti-patterns from RAG memory
+ * Configuration for DualMCPAgent initialization.
  */
-export class MCPAgent {
-  /** Client for Nmap MCP server */
-  private nmapClient: NmapMCPClient;
-  /** Client for SearchSploit MCP server */
-  private searchSploitClient: SearchSploitMCPClient | null = null;
-  /** Client for RAG Memory MCP server */
-  private ragMemoryClient: RAGMemoryMCPClient | null = null;
+export interface DualMCPConfig {
+  /** RAG Memory server config (stdio transport on host) */
+  ragMemory?: { path: string };
+  /** Kali MCP server config (HTTP transport in Docker) */
+  kali?: { url: string };
+}
+
+/**
+ * DualMCPAgent - Manages two MCP server connections.
+ *
+ * RAG server provides knowledge (playbooks, anti-patterns).
+ * Kali server provides execution (shell commands, scripts, packages, searchsploit).
+ */
+export class DualMCPAgent {
+  /** RAG Memory MCP client (host, stdio transport) */
+  private ragClient: RAGMemoryMCPClient | null = null;
+  /** Kali MCP client (Docker, HTTP transport) */
+  private kaliClient: Client | null = null;
+  /** Kali HTTP transport instance */
+  private kaliTransport: StreamableHTTPClientTransport | null = null;
+  /** Set of tool names available on the Kali server (populated at init) */
+  private kaliTools: Set<string> = new Set();
   /** Whether the agent has been initialized */
-  private isInitialized: boolean = false;
+  private initialized = false;
 
   /**
-   * Creates a new MCPAgent.
+   * Initializes connections to both MCP servers.
    *
-   * Does not connect to servers - call initialize() first.
+   * Connects to RAG (stdio) and/or Kali (HTTP) based on provided config.
+   * Discovers available tools from the Kali server dynamically.
+   *
+   * @param config - Server connection configuration
    */
-  constructor() {
-    this.nmapClient = new NmapMCPClient();
-    this.searchSploitClient = new SearchSploitMCPClient();
-    this.ragMemoryClient = new RAGMemoryMCPClient();
+  async initialize(config: DualMCPConfig): Promise<void> {
+    // Connect to RAG Memory server (stdio transport, host-local)
+    if (config.ragMemory) {
+      try {
+        this.ragClient = new RAGMemoryMCPClient();
+        await this.ragClient.connect(config.ragMemory.path);
+        console.log('[DualMCPAgent] RAG Memory server connected');
+      } catch (error) {
+        console.error('[DualMCPAgent] RAG Memory connection failed:', error);
+        this.ragClient = null;
+      }
+    }
+
+    // Connect to Kali MCP server (HTTP transport, Docker container)
+    if (config.kali) {
+      try {
+        this.kaliClient = new Client({ name: 'mvp-agent', version: '2.0.0' });
+        const mcpUrl = new URL('/mcp', config.kali.url);
+        this.kaliTransport = new StreamableHTTPClientTransport(mcpUrl);
+        await this.kaliClient.connect(this.kaliTransport);
+
+        // Discover available tools dynamically
+        const toolList = await this.kaliClient.listTools();
+        toolList.tools.forEach((t) => this.kaliTools.add(t.name));
+        console.log(
+          `[DualMCPAgent] Kali server connected (${this.kaliTools.size} tools: ${[...this.kaliTools].join(', ')})`
+        );
+      } catch (error) {
+        console.error('[DualMCPAgent] Kali MCP connection failed:', error);
+        this.kaliClient = null;
+      }
+    }
+
+    this.initialized = true;
   }
 
   /**
-   * Initializes connections to MCP servers.
+   * Executes a tool call from an ExecutorStep.
    *
-   * Connects to each configured server (Nmap, SearchSploit, RAG Memory).
-   * Must be called before executeTool().
-   *
-   * @param config - Server configuration with paths to MCP server executables
-   *
-   * @example
-   * await mcpAgent.initialize({
-   *   servers: {
-   *     nmap: { path: './nmap-server/dist/index.js' },
-   *     searchsploit: { path: './searchsploit-server/dist/index.js' },
-   *     rag_memory: { path: './rag-memory-server/dist/index.js' }
-   *   }
-   * });
-   */
-  async initialize(config: {
-    servers: {
-      nmap?: { path: string };
-      searchsploit?: { path: string };
-      rag_memory?: { path: string };
-    };
-  }): Promise<void> {
-    // Connect to Nmap server
-    if (config.servers.nmap) {
-      await this.nmapClient.connect(config.servers.nmap.path);
-      console.log('[MCPAgent] ✓ Nmap server connected');
-    }
-
-    // Connect to SearchSploit server
-    if (config.servers.searchsploit && this.searchSploitClient) {
-      await this.searchSploitClient.connect(config.servers.searchsploit.path);
-      console.log('[MCPAgent] ✓ SearchSploit server connected');
-    }
-
-    // Connect to RAG Memory server
-    if (config.servers.rag_memory && this.ragMemoryClient) {
-      await this.ragMemoryClient.connect(config.servers.rag_memory.path);
-      console.log('[MCPAgent] ✓ RAG Memory server connected');
-    }
-
-    this.isInitialized = true;
-  }
-
-  /**
-   * Executes a tool call from an execution step.
-   *
-   * Routes the tool call to the appropriate MCP client based on the
-   * tool name prefix (e.g., "nmap_" goes to the Nmap client).
+   * Routes based on tool name prefix:
+   * - rag_* → RAG Memory server
+   * - Everything else → Kali server
    *
    * @param step - The ExecutorStep containing tool name and arguments
-   * @returns ToolResult with success status and raw output or error
-   *
-   * @example
-   * const result = await mcpAgent.executeTool({
-   *   tool: 'nmap_port_scan',
-   *   arguments: { target: '192.168.1.1', ports: '1-1000' },
-   *   description: 'Scan common ports'
-   * });
+   * @returns ToolResult with success status and output
    */
   async executeTool(step: ExecutorStep): Promise<ToolResult> {
-    if (!this.isInitialized) {
-      return {
-        success: false,
-        output: '',
-        error: 'MCP Agent not initialized',
-      };
+    if (!this.initialized) {
+      return { success: false, output: '', error: 'DualMCPAgent not initialized' };
     }
 
     const { tool, arguments: args } = step;
-    console.log(`[MCPAgent] Executing: ${tool}`);
+    console.log(`[DualMCPAgent] Executing: ${tool}`);
 
     try {
-      // Route to appropriate MCP client based on tool prefix
-      if (tool.startsWith('nmap_')) {
-        return await this.executeNmapTool(tool, args);
-      } else if (tool.startsWith('searchsploit_')) {
-        return await this.executeSearchSploitTool(tool, args);
-      } else if (tool.startsWith('rag_')) {
-        return await this.executeRAGMemoryTool(tool, args);
+      if (tool.startsWith('rag_')) {
+        return await this.callRAGTool(tool, args);
       } else {
-        return {
-          success: false,
-          output: '',
-          error: `Unknown tool: ${tool}`,
-        };
+        const output = await this.callKaliTool(tool, args);
+        return { success: true, output };
       }
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[MCPAgent] Error executing ${tool}:`, errorMessage);
-      return {
-        success: false,
-        output: '',
-        error: errorMessage,
-      };
+      console.error(`[DualMCPAgent] Error executing ${tool}:`, errorMessage);
+      return { success: false, output: '', error: errorMessage };
     }
   }
 
   /**
-   * Executes an Nmap-specific tool via the MCP client.
+   * Calls a tool on the Kali MCP server.
    *
-   * Maps tool names to NmapMCPClient methods:
-   * - nmap_host_discovery → nmapClient.hostDiscovery()
-   * - nmap_port_scan → nmapClient.portScan()
-   * - nmap_service_detection → nmapClient.serviceDetection()
+   * Used by both the recon flow (via executeTool) and the agentic loop
+   * (via AgenticExecutor.dispatchToolCall).
    *
-   * @param tool - The Nmap tool name (e.g., "nmap_port_scan")
-   * @param args - Tool arguments (target, ports, scanType, etc.)
-   * @returns ToolResult with raw Nmap output
+   * @param name - Tool name (e.g., "execute_shell_cmd", "searchsploit_search")
+   * @param args - Tool arguments as key-value pairs
+   * @returns Raw text output from the tool
    */
-  private async executeNmapTool(
-    tool: string,
-    args: Record<string, unknown>
-  ): Promise<ToolResult> {
-    let result;
-
-    switch (tool) {
-      case 'nmap_host_discovery':
-        result = await this.nmapClient.hostDiscovery(args.target as string);
-        break;
-
-      case 'nmap_port_scan': {
-        const scanType = (args.scanType as string) || 'tcp';
-        const validScanTypes = ['tcp', 'udp', 'syn'] as const;
-        const resolvedScanType = validScanTypes.includes(scanType as typeof validScanTypes[number])
-          ? (scanType as 'tcp' | 'udp' | 'syn')
-          : 'tcp';
-        result = await this.nmapClient.portScan(
-          args.target as string,
-          (args.ports as string) || 'top-1000',
-          resolvedScanType
-        );
-        break;
-      }
-
-      case 'nmap_service_detection':
-        result = await this.nmapClient.serviceDetection(
-          args.target as string,
-          (args.ports as string) || 'top-100'
-        );
-        break;
-
-      case 'nmap_os_detection':
-        result = await this.nmapClient.osDetection(args.target as string);
-        break;
-
-      default:
-        return {
-          success: false,
-          output: '',
-          error: `Unknown Nmap tool: ${tool}`,
-        };
+  async callKaliTool(name: string, args: Record<string, unknown>): Promise<string> {
+    if (!this.kaliClient) {
+      throw new Error('Kali MCP client not connected');
     }
 
-    return {
-      success: result.success,
-      output: result.output,
-      error: result.error || undefined,
-    };
+    const result = await this.kaliClient.callTool({ name, arguments: args });
+
+    // Extract text content from MCP response
+    if (!result.content || !Array.isArray(result.content)) {
+      return String(result);
+    }
+    return result.content
+      .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
+      .map((c) => c.text)
+      .join('\n');
   }
 
   /**
-   * Executes a SearchSploit-specific tool via the MCP client.
+   * Calls a tool on the RAG Memory MCP server.
    *
-   * Maps tool names to SearchSploitMCPClient methods:
-   * - searchsploit_search → Search ExploitDB for vulnerabilities
-   * - searchsploit_examine → Examine exploit code details
-   * - searchsploit_path → Get local file path to exploit
+   * Supports rag_recall and rag_query_playbooks.
    *
-   * @param tool - The SearchSploit tool name
-   * @param args - Tool arguments (query, exploit_id, etc.)
-   * @returns ToolResult with SearchSploit output
+   * @param tool - RAG tool name
+   * @param args - Tool arguments (query, observation, top_k, n_results)
+   * @returns ToolResult with JSON output
    */
-  private async executeSearchSploitTool(
-    tool: string,
-    args: Record<string, unknown>
-  ): Promise<ToolResult> {
-    if (!this.searchSploitClient) {
-      return {
-        success: false,
-        output: '',
-        error: 'SearchSploit client not initialized',
-      };
-    }
-
-    try {
-      switch (tool) {
-        case 'searchsploit_search': {
-          const searchOptions = typeof args.query === 'string'
-            ? { query: args.query }
-            : (args as any);
-          const result = await this.searchSploitClient.search(searchOptions);
-          return {
-            success: result.success,
-            output: JSON.stringify(result),
-            error: result.error,
-          };
-        }
-
-        case 'searchsploit_examine': {
-          const edbId = (args.edbId || args.exploit_id) as string;
-          const result = await this.searchSploitClient.examine(edbId);
-          return {
-            success: result.success,
-            output: result.output,
-            error: result.error || undefined,
-          };
-        }
-
-        case 'searchsploit_path': {
-          const edbId = (args.edbId || args.exploit_id) as string;
-          const result = await this.searchSploitClient.getPath(edbId);
-          return {
-            success: result.success,
-            output: result.path || '',
-            error: result.error || undefined,
-          };
-        }
-
-        default:
-          return {
-            success: false,
-            output: '',
-            error: `Unknown SearchSploit tool: ${tool}`,
-          };
-      }
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return {
-        success: false,
-        output: '',
-        error: errorMessage,
-      };
-    }
-  }
-
-  /**
-   * Executes a RAG Memory-specific tool via the MCP client.
-   *
-   * Maps tool names to RAGMemoryMCPClient methods:
-   * - rag_recall → Recall past lessons and anti-patterns
-   * - rag_query_playbooks → Query security playbooks (alias for recall)
-   *
-   * @param tool - The RAG Memory tool name
-   * @param args - Tool arguments (query/observation, top_k)
-   * @returns ToolResult with RAG Memory output (JSON)
-   */
-  private async executeRAGMemoryTool(
-    tool: string,
-    args: Record<string, unknown>
-  ): Promise<ToolResult> {
-    if (!this.ragMemoryClient) {
-      return {
-        success: false,
-        output: '',
-        error: 'RAG Memory client not initialized',
-      };
+  async callRAGTool(tool: string, args: Record<string, unknown>): Promise<ToolResult> {
+    if (!this.ragClient) {
+      return { success: false, output: '', error: 'RAG Memory client not connected' };
     }
 
     try {
       switch (tool) {
         case 'rag_recall': {
-          // Queries the anti_patterns collection via SDK
           const observation = (args.query || args.observation) as string;
           const topK = (args.top_k as number) || 3;
-
-          const result = await this.ragMemoryClient.recallMyExperience({
+          const result = await this.ragClient.recallMyExperience({
             observation,
             top_k: topK,
           });
-
           return {
             success: result.success,
             output: JSON.stringify(result),
@@ -330,12 +180,9 @@ export class MCPAgent {
         }
 
         case 'rag_query_playbooks': {
-          // Queries the playbooks collection via SDK
           const query = (args.query || args.observation) as string;
           const nResults = (args.n_results as number) || (args.top_k as number) || 3;
-
-          const result = await this.ragMemoryClient.searchSecurityHandbook(query, nResults);
-
+          const result = await this.ragClient.searchSecurityHandbook(query, nResults);
           return {
             success: result.success,
             output: JSON.stringify(result),
@@ -344,40 +191,52 @@ export class MCPAgent {
         }
 
         default:
-          return {
-            success: false,
-            output: '',
-            error: `Unknown RAG Memory tool: ${tool}`,
-          };
+          return { success: false, output: '', error: `Unknown RAG tool: ${tool}` };
       }
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      return {
-        success: false,
-        output: '',
-        error: errorMessage,
-      };
+      return { success: false, output: '', error: errorMessage };
     }
   }
 
   /**
-   * Disconnects from all MCP servers and releases resources.
+   * Returns the list of tool names available on the Kali server.
    *
-   * Should be called when done using the agent to ensure clean shutdown.
+   * Populated dynamically during initialize() via listTools().
+   * Used by ExecutorAgent and AgenticExecutor to build tool descriptions.
+   */
+  getKaliToolNames(): string[] {
+    return [...this.kaliTools];
+  }
+
+  /**
+   * Returns whether the Kali MCP server is connected.
+   */
+  isKaliConnected(): boolean {
+    return this.kaliClient !== null;
+  }
+
+  /**
+   * Returns whether the RAG Memory server is connected.
+   */
+  isRAGConnected(): boolean {
+    return this.ragClient !== null;
+  }
+
+  /**
+   * Disconnects from all MCP servers and releases resources.
    */
   async shutdown(): Promise<void> {
-    if (this.isInitialized) {
-      await this.nmapClient.disconnect();
-
-      if (this.searchSploitClient) {
-        await this.searchSploitClient.disconnect();
-      }
-
-      if (this.ragMemoryClient) {
-        await this.ragMemoryClient.disconnect();
-      }
-
-      console.log('[MCPAgent] All servers disconnected');
+    if (this.kaliTransport) {
+      await this.kaliTransport.close();
+      console.log('[DualMCPAgent] Kali server disconnected');
     }
+
+    if (this.ragClient) {
+      await this.ragClient.disconnect();
+      console.log('[DualMCPAgent] RAG Memory server disconnected');
+    }
+
+    console.log('[DualMCPAgent] All servers disconnected');
   }
 }

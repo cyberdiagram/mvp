@@ -1,0 +1,46 @@
+services:
+  brain:
+    build:
+      context: ..
+      dockerfile: docker/brain/Dockerfile
+    container_name: pentest-brain
+    env_file: ../.env
+    environment:
+      - KALI_MCP_URL=http://kali:3001
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ..:/app                     # Bind-mount entire host project → container /app
+      - /app/node_modules           # Anonymous volume: container keeps its own deps
+      - /app/dist                   # Anonymous volume: container compiles its own dist/
+    command: npm run dev
+    depends_on:
+      kali:
+        condition: service_started
+    networks:
+      - pentest-net
+    stdin_open: true
+    tty: true
+
+  kali:
+    build: ./kali
+    container_name: pentest-kali
+    volumes:
+      - kali_scripts:/app/scripts
+      - kali_logs:/app/logs
+      - kali_apt_cache:/var/cache/apt
+      - kali_apt_lib:/var/lib/apt
+    networks:
+      - pentest-net
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+
+networks:
+  pentest-net:
+    driver: bridge
+
+volumes:
+  kali_scripts:
+  kali_logs:
+  kali_apt_cache:
+  kali_apt_lib:

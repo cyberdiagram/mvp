@@ -2,26 +2,25 @@
 
 ![Visitors](https://api.visitorbadge.io/api/visitors?path=flashoop/mvp&label=VISITORS&countColor=%23263238)
 
-> **Last Updated:** 2026-02-08
-> **Architecture Version:** 2.2 (Observability & Safety Hardening)
-> **Latest Feature:** Langfuse Tracing, Duplicate Operation Detection, Database Exhaustion Detection, Dynamic Tool Whitelist, RAG Memory Refactoring, OS Detection (2026-02-08)
+> **Last Updated:** 2026-02-13
+> **Architecture Version:** 3.0 (Dual MCP + Docker Architecture)
+> **Latest Feature:** Docker deployment (Brain + Kali containers), Dual MCP Agent (RAG stdio + Kali HTTP), AgenticExecutor OODA loop, 6 new CLI commands, dynamic tool discovery (2026-02-13)
 
 An AI-powered penetration testing agent using Claude AI with a hierarchical multi-agent architecture, Intelligence Layer for target profiling, Evaluation Loop for continuous improvement, and RAG Memory System that queries security playbooks (successful techniques) and anti-patterns (failed exploits) from past experiences.
 
 ## Architecture
 
-**Version**: 2.2 (Observability & Safety Hardening)
-**Last Updated**: 2026-02-08
+**Version**: 3.0 (Dual MCP + Docker Architecture)
+**Last Updated**: 2026-02-13
 
 ### Overview
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                          ORCHESTRATOR (v2.0)                           │
-│                    (src/agent/core/orchestrator.ts)                    │
-│         Layered Architecture + Intelligence + Evaluation + RAG         │
-│              Incremental Analysis + Retry with Backoff                 │
-└────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         ORCHESTRATOR (v3.0)                              │
+│                   (src/agent/core/orchestrator.ts)                       │
+│       Dual MCP + Docker + OODA Loop + Intelligence + Evaluation          │
+└─────────────────────────────────────────────────────────────────────────┘
                                     │
         ┌───────────────────────────┼───────────────────────────┐
         │                           │                           │
@@ -31,16 +30,20 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
 │ (Brains)         │    │   (Memory)       │      │   (Hands)        │
 ├──────────────────┤    ├──────────────────┤      ├──────────────────┤
 │ • Reasoner       │    │ • VulnLookup     │      │ • Executor       │
-│   (Sonnet 4)     │◄───┤   (SearchSploit) │      │   (Haiku 4.5)    │
-│   Strategic      │    │   CVE Research   │      │   Tactical       │
-│   Planning       │    │                  │      │   Breakdown      │
-│                  │    │ • RAG Memory     │      │                  │
-│ • Profiler       │    │   (ChromaDB)     │      │ • MCP Agent      │
-│   (Haiku 3.5)    │    │   Playbooks +    │      │   3 MCP Servers  │
-│   Target         │    │   Anti-Patterns  │      │                  │
-│   Analysis       │    │                  │      │ • Data Cleaner   │
-│                  │    │                  │      │   (Haiku 4.5)    │
-└──────────────────┘    └──────────────────┘      │   Output Parsing │
+│   (Sonnet 4)     │◄───┤   (SearchSploit  │      │   (Haiku 4.5)    │
+│   Strategic      │    │    via Kali MCP)  │      │   Tactical Recon │
+│   Planning       │    │   CVE Research   │      │                  │
+│                  │    │                  │      │ • AgenticExecutor│
+│ • Profiler       │    │ • RAG Memory     │      │   (Sonnet 4)     │
+│   (Haiku 3.5)    │    │   (ChromaDB)     │      │   OODA Loop      │
+│   Target         │    │   Playbooks +    │      │   Exploit Exec   │
+│   Analysis       │    │   Anti-Patterns  │      │                  │
+│                  │    │                  │      │ • DualMCPAgent   │
+└──────────────────┘    └──────────────────┘      │   RAG (stdio) +  │
+                                                   │   Kali (HTTP)    │
+                                                   │                  │
+                                                   │ • Data Cleaner   │
+                                                   │   (Haiku 4.5)    │
                                                    └──────────────────┘
         │                           │                           │
         └───────────────────────────┼───────────────────────────┘
@@ -49,51 +52,55 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
                     ┌──────────────────────────────┐
                     │   UTILITIES & MONITORING     │
                     ├──────────────────────────────┤
-                    │ • Skills Loader + Memory Mgr │
+                    │ • Skill Manager (unified)    │
                     │ • Token Monitor (Cost Track) │
                     │ • Session Logger (JSONL ETL) │
                     │ • Evaluator (TP/FP/FN/TN)    │
                     └──────────────────────────────┘
                                     │
                                     ▼
-                    ┌──────────────────────────────┐
-                    │      MCP INTEGRATIONS        │
-                    ├──────────────────────────────┤
-                    │ • Nmap Server (Recon)        │
-                    │ • SearchSploit Server (CVEs) │
-                    │ • RAG Memory Server (Learn)  │
-                    └──────────────────────────────┘
+          ┌──────────────────────────────────────────────────┐
+          │            DUAL MCP ARCHITECTURE                  │
+          ├──────────────────────────────────────────────────┤
+          │ • Kali MCP Server (HTTP, Docker container)       │
+          │   └─ execute_shell_cmd, write_file,              │
+          │      execute_script, manage_packages,            │
+          │      searchsploit_search, searchsploit_examine   │
+          │                                                   │
+          │ • RAG Memory MCP Server (stdio, host)            │
+          │   └─ rag_recall, rag_query_playbooks, rag_store  │
+          └──────────────────────────────────────────────────┘
 ```
 
-**Key Features (v2.2)**:
+**Key Features (v3.0)**:
+- ✅ **Docker Deployment**: Brain (Node.js) + Kali (Python FastMCP) containers on bridge network
+- ✅ **Dual MCP Architecture**: RAG Memory (stdio on host) + Kali (HTTP in Docker) replacing 3 stdio servers
+- ✅ **AgenticExecutor**: OODA loop engine for autonomous exploit execution (generate, execute, plan-based, agentic)
+- ✅ **6 New CLI Commands**: `generate`, `execute`, `interactive`, `autorun`, `plan`, `autonomous`
+- ✅ **Dynamic Tool Discovery**: Tools discovered at runtime via `kaliClient.listTools()` — no static whitelist
+- ✅ **Unified SkillManager**: Merged skills-loader + pentest-executor skill system with tool-callable methods
 - ✅ **Layered Architecture**: 5 layers (core, intelligence, knowledge, execution, utils)
-- ✅ **Langfuse Observability**: OpenTelemetry-based tracing for all reconnaissance phases via Langfuse
-- ✅ **Duplicate Operation Detection**: Tracks command signatures to prevent repeated identical tool calls with `[SYSTEM INTERVENTION - LOOP DETECTED]` warnings
-- ✅ **Database Exhaustion Detection**: Detects when all queries return empty results and injects `[SYSTEM ADVICE - DATABASE EXHAUSTION]` to redirect the Reasoner
-- ✅ **Dynamic Tool Whitelist**: `ALLOWED_TOOLS` loaded from `src/config/allowed_tools.json` (single source of truth) with tactical plan + LLM validation
-- ✅ **RAG Memory Refactoring**: Two semantically distinct interfaces — `recallInternalWarnings` (Phase 0) and `searchHandbook` (Phase 4b) — replacing raw MCP calls
-- ✅ **OS Detection**: `nmap_os_detection` tool added across server, client SDK, and agent layers
+- ✅ **Langfuse Observability**: OpenTelemetry-based tracing for all phases
 - ✅ **Incremental Intelligence**: Only analyzes NEW services, merges results intelligently
 - ✅ **Retry Mechanism**: Exponential backoff (max 2 retries) for transient failures
-- ✅ **3 MCP Servers**: Nmap, SearchSploit, RAG Memory with unified tool routing
-- ✅ **Tactical Plan Passthrough**: Executor uses Reasoner's tactical plan directly, bypassing LLM re-planning
-- ✅ **Explicit Failure Feedback**: Failed tool executions are reported to Reasoner with actionable context
-- ✅ **Service Deduplication**: `host:port` dedup in execution loop prevents context bloat
-- ✅ **Fingerprint Parsing Skills**: Dynamic skill injection into DataCleaner for technology identification
+- ✅ **Tactical Plan Passthrough**: Executor uses Reasoner's tactical plan directly
+- ✅ **Explicit Failure Feedback**: Failed tool executions reported to Reasoner with context
+- ✅ **Service Deduplication**: `host:port` dedup prevents context bloat
 
 ### Layered Architecture Components
 
 | Layer | Agent | Model | Purpose |
 |-------|-------|-------|---------|
-| **Core** | Orchestrator | - | Main coordinator (1,360 lines, 8 phases + 2 utilities) |
+| **Core** | Orchestrator | - | Main coordinator (8 phases + 2 utilities) |
 | **Intelligence** | Reasoner | Sonnet 4 | **STRATEGIC** planning - decides WHAT to do and WHY |
 | **Intelligence** | Profiler | Haiku 3.5 | Target profiling (OS, tech stack, security posture) |
-| **Knowledge** | VulnLookup | - | Exploit research via SearchSploit MCP (offline CVE database) |
+| **Knowledge** | VulnLookup | - | Exploit research via SearchSploit (Kali container) |
 | **Knowledge** | RAG Memory | - | Retrieves playbooks & anti-patterns from past penetration tests |
-| **Execution** | Executor | Haiku 4.5 | **TACTICAL** execution - decides HOW (tool whitelist + plan passthrough) |
-| **Execution** | MCP Agent | - | Executes security tools via 3 MCP servers (Nmap, SearchSploit, RAG) |
+| **Execution** | Executor | Haiku 4.5 | **TACTICAL** recon execution - breaks down strategic actions into tool calls |
+| **Execution** | AgenticExecutor | Sonnet 4 | **OODA LOOP** - autonomous exploit generation, execution, and learning |
+| **Execution** | DualMCPAgent | - | Routes tools to RAG (stdio) or Kali (HTTP) MCP servers |
 | **Execution** | Data Cleaner | Haiku 4.5 | Parses & enriches output (skill-injected fingerprinting + confidence) |
-| **Utilities** | Skills Loader | - | Dynamic skill loading + Memory Manager (tool preferences) |
+| **Utilities** | Skill Manager | - | Unified skill loading + memory + tool-callable skill methods |
 | **Utilities** | Token Monitor | - | Tracks token consumption and costs per agent/model |
 | **Utilities** | Session Logger | - | JSONL logging for RAG Memory ETL pipeline (training data) |
 | **Utilities** | Evaluator | Haiku 3.5 | Post-execution evaluation (TP/FP/FN/TN ground truth labeling) |
@@ -161,8 +168,8 @@ The system enforces a **strict separation of concerns** between strategic and ta
 {
   "steps": [
     {
-      "tool": "nmap_service_detection",
-      "arguments": { "target": "10.0.0.1", "ports": "80,443" },
+      "tool": "execute_shell_cmd",
+      "arguments": { "command": "nmap -sV -p 80,443 10.0.0.1" },
       "description": "Detect HTTP/HTTPS service versions"
     }
   ],
@@ -179,67 +186,70 @@ The system enforces a **strict separation of concerns** between strategic and ta
 
 ## Project Structure
 
-**✨ NEW: Layered Architecture (2026-02-07)**
+**Architecture Version**: 3.0 (Dual MCP + Docker)
 
-The project has been refactored from a flat structure to a layered architecture following the "Brains-Knowledge-Hands" metaphor:
+The project uses a layered architecture following the "Brains-Knowledge-Hands" metaphor, with Docker deployment and dual MCP transport:
 
 ```
+docker/
+├── docker-compose.yml              # Brain + Kali pod on bridge network
+├── brain/
+│   └── Dockerfile                  # Node 20 container for MVP agent
+└── kali/
+    ├── Dockerfile                  # Kali rolling + exploitdb + pentest tools
+    ├── server.py                   # FastMCP server (6 tools, port 3001)
+    └── requirements.txt            # Python dependencies
+
 src/
-├── index.ts                        # Interactive entry point
+├── index.ts                        # Interactive CLI (recon + 6 exploit commands)
 ├── instrumentation.ts              # Langfuse/OpenTelemetry tracing setup
 ├── config/
 │   ├── agent-config.ts            # Environment configuration
-│   ├── allowed_tools.json          # Tool whitelist (single source of truth)
 │   └── agent_rules.json            # Memory Manager rules (persistent)
 ├── skills/
 │   ├── nmap_skill.md               # Nmap reconnaissance skill
-│   └── fingerprint_parsing_skill.md # Technology fingerprinting rules (pfSense, WebLogic, etc.)
+│   ├── fingerprint_parsing_skill.md # Technology fingerprinting rules
+│   ├── wpscan.md                   # WordPress scanning skill
+│   └── github-search.md           # GitHub PoC search skill
 └── agent/
     ├── index.ts                    # Main agent barrel export
     │
-    ├── core/                       # 🧠 ORCHESTRATION LAYER
+    ├── core/                       # ORCHESTRATION LAYER
     │   ├── orchestrator.ts        # PentestAgent class (main coordinator)
     │   ├── types.ts               # Global type definitions
-    │   ├── index.ts               # Barrel export
-    │   └── README.md              # Layer documentation
+    │   └── index.ts               # Barrel export
     │
-    ├── intelligence/               # 🎯 DECISION & ANALYSIS (Brains)
+    ├── intelligence/               # DECISION & ANALYSIS (Brains)
     │   ├── reasoner.ts            # ReasonerAgent (Sonnet 4) - Strategic planning
     │   ├── profiler.ts            # ProfilerAgent (Haiku 3.5) - Target profiling
-    │   ├── index.ts               # Barrel export
-    │   └── README.md              # Layer documentation
+    │   └── index.ts               # Barrel export
     │
-    ├── knowledge/                  # 📚 RETRIEVAL & MEMORY (Memory)
-    │   ├── vuln-lookup.ts         # VulnLookupAgent (SearchSploit MCP)
+    ├── knowledge/                  # RETRIEVAL & MEMORY (Memory)
+    │   ├── vuln-lookup.ts         # VulnLookupAgent (SearchSploit via Kali)
     │   ├── rag-memory-agent.ts    # RAGMemoryAgent (ChromaDB MCP)
-    │   ├── index.ts               # Barrel export
-    │   └── README.md              # Layer documentation
+    │   └── index.ts               # Barrel export
     │
-    ├── execution/                  # 🔨 TASK EXECUTION (Hands)
-    │   ├── executor.ts            # ExecutorAgent (Haiku 4.5) - Tactical breakdown
-    │   ├── mcp-agent.ts           # MCPAgent - Tool execution via MCP
+    ├── execution/                  # TASK EXECUTION (Hands)
+    │   ├── executor.ts            # ExecutorAgent (Haiku 4.5) - Recon tactical breakdown
+    │   ├── agentic-executor.ts    # AgenticExecutor - OODA loop for exploit execution
+    │   ├── mcp-agent.ts           # DualMCPAgent - RAG (stdio) + Kali (HTTP)
     │   ├── data-cleaner.ts        # DataCleanerAgent (Haiku 4.5) - Output parsing
-    │   ├── index.ts               # Barrel export
-    │   └── README.md              # Layer documentation
+    │   └── index.ts               # Barrel export
     │
-    ├── utils/                      # 🛠️ SUPPORT & INFRASTRUCTURE
-    │   ├── skills-loader.ts       # SkillsLoader + Memory Manager
+    ├── utils/                      # SUPPORT & INFRASTRUCTURE
+    │   ├── skill-manager.ts       # Unified SkillManager (skills + memory + tools)
+    │   ├── skills-loader.ts       # Legacy SkillsLoader (backward compat)
     │   ├── token-monitor.ts       # Token consumption tracking
     │   ├── session-logger.ts      # JSONL session logger
-    │   ├── index.ts               # Barrel export
-    │   └── README.md              # Layer documentation
+    │   └── index.ts               # Barrel export
     │
-    └── definitions/                # ⏳ LEGACY (Phase 6 migration pending)
+    └── definitions/                # LEGACY (Phase 6 migration pending)
         ├── evaluator.ts           # EvaluatorAgent (Haiku 3.5)
         └── index.ts               # Exports
 
 logs/
 ├── sessions/                       # JSONL session logs for RAG ETL
 └── training_data/                  # Training pairs (JSON) for RLHF
-
-docs/
-├── Intelligence-and-Memory-Systems.md  # Unified documentation
-└── Final_Architecture_Plan_with_Evaluation_Loop-0204-from-claude.md
 ```
 
 **Layer Responsibilities:**
@@ -254,8 +264,8 @@ docs/
 
 ### Prerequisites
 
-- Node.js 18+
-- nmap installed on system
+- Node.js 20+
+- Docker & Docker Compose (for Kali container)
 - Anthropic API key
 
 ### Install Dependencies
@@ -270,13 +280,28 @@ npm install
 # Install yalc globally
 npm install -g yalc
 
-# In the mcp-nmap-client repo:
+# RAG Memory MCP client (only remaining yalc dependency):
+cd ../pentest-mcp-server/rag-memory-server-ts
 npm run build && yalc publish
 
 # In this repo:
-yalc add @cyber/mcp-nmap-client
+yalc add @cyber/mcp-rag-memory-client
 npm install
 ```
+
+### Docker Setup
+
+```bash
+# Build and start both containers
+cd docker && docker compose up --build
+
+# Or start just the Kali container (for local development)
+cd docker && docker compose up kali -d
+```
+
+The Kali container runs a FastMCP server on port 3001 with 6 tools:
+- **Dynamic Execution**: `execute_shell_cmd`, `write_file`, `execute_script`, `manage_packages`
+- **Information Retrieval**: `searchsploit_search`, `searchsploit_examine`
 
 ### Environment Variables
 
@@ -284,24 +309,23 @@ npm install
 # Required
 export ANTHROPIC_API_KEY="your-api-key"
 
-# Optional MCP Server Paths (defaults provided if not set)
-export NMAP_SERVER_PATH="/path/to/pentest-mcp-server/nmap-server-ts/dist/index.js"
-export SEARCHSPLOIT_SERVER_PATH="/path/to/pentest-mcp-server/searchsploit-server-ts/dist/index.js"
-export RAG_MEMORY_SERVER_PATH="/path/to/pentest-rag-memory/dist/server/index.js"
+# Kali MCP Server (HTTP, Docker container)
+export KALI_MCP_URL="http://localhost:3001"  # Default
+
+# RAG Memory MCP Server (stdio, host)
+export RAG_MEMORY_SERVER_PATH="../pentest-mcp-server/rag-memory-server-ts/dist/index.js"
 
 # Evaluation & Training (optional)
-export ENABLE_EVALUATION="true"             # Enable evaluation loop
-export TRAINING_DATA_PATH="./logs/training_data"  # Training pairs storage
+export ENABLE_EVALUATION="true"
+export TRAINING_DATA_PATH="./logs/training_data"
 
 # RAG Memory System (optional)
-export ENABLE_RAG_MEMORY="true"             # Enable RAG memory recall
-export DEEPSEEK_API_KEY="sk-xxx"            # For ETL transformation
-export CHROMADB_PATH="./data/chromadb"      # Vector database location
+export ENABLE_RAG_MEMORY="true"
 
 # Langfuse Observability (optional)
-export LANGFUSE_SECRET_KEY="sk-lf-xxx"      # Langfuse secret key
-export LANGFUSE_PUBLIC_KEY="pk-lf-xxx"      # Langfuse public key
-export LANGFUSE_BASE_URL="https://cloud.langfuse.com"  # Langfuse endpoint (default)
+export LANGFUSE_SECRET_KEY="sk-lf-xxx"
+export LANGFUSE_PUBLIC_KEY="pk-lf-xxx"
+export LANGFUSE_BASE_URL="https://cloud.langfuse.com"
 ```
 
 ## Usage
@@ -330,15 +354,33 @@ When the agent starts, you'll see an interactive prompt:
 >
 ```
 
+**Reconnaissance:**
+
 | Command | Description | Example |
 |---------|-------------|---------|
-| `recon <target>` | Run reconnaissance on target | `recon 192.168.1.0/24` |
+| `recon <target>` | Run automated reconnaissance | `recon 192.168.1.0/24` |
+| `<IP or hostname>` | Auto-run recon on target | `192.168.1.10` |
+
+**Exploit Execution (NEW in v3.0):**
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `generate <task>` | Generate a PoC script with Claude | `generate "port scanner for 10.0.0.1"` |
+| `execute <filename>` | Run an existing script in Kali container | `execute exploit.py` |
+| `interactive <task>` | Generate, review/edit, then execute | `interactive "SQLi test"` |
+| `autorun <task>` | Generate + write + execute automatically | `autorun "nmap scan 10.0.0.1"` |
+| `plan <json-file>` | Load Tactical Plan and choose strategy | `plan ./TacticalPlan.json` |
+| `autonomous <task>` | Full agentic OODA loop | `autonomous "exploit CVE-2021-41773"` |
+
+**Memory & System:**
+
+| Command | Description | Example |
+|---------|-------------|---------|
 | `remember <tool> <rule>` | Save a tool preference | `remember nmap use -Pn` |
 | `forget <tool>` | Clear all preferences for a tool | `forget nmap` |
 | `rules [tool]` | List saved preferences | `rules` or `rules nmap` |
 | `help` | Show help message | `help` |
 | `exit` | Quit the application | `exit` |
-| `<IP or hostname>` | Auto-run recon on target | `192.168.1.10` |
 
 ## Memory Manager
 
@@ -662,29 +704,25 @@ Scenario: SSH, port 22, remote access
 **Training Data Generation:**
 The evaluation result is combined with the intelligence context to create training pairs for model improvement (RLHF/fine-tuning).
 
-### SearchSploit MCP Server Setup
+### Kali MCP Server (Docker)
 
-The VulnLookup agent requires the SearchSploit MCP Server:
+The Kali container includes `exploitdb` and all pentest tools. SearchSploit runs inside the container — no separate server needed.
 
 ```bash
-# Install ExploitDB (if not installed)
-sudo apt install exploitdb
-# or: git clone https://gitlab.com/exploit-database/exploitdb.git
+# Build and start Kali container
+cd docker && docker compose up kali -d
 
-# Build SearchSploit MCP server
-cd ../pentest-mcp-server/searchsploit-server-ts
-npm install
-npm run build
-
-# The agent will automatically connect via MCP protocol
+# Verify MCP server is running
+curl http://localhost:3001/mcp
 ```
 
-**Features:**
-- Offline-capable (local ExploitDB database)
-- No rate limits (local CLI tool)
-- Instant exploit lookup by product/version/CVE
-- Full PoC code examination via `searchsploit_examine`
-- Local file paths via `searchsploit_path`
+**Tools available in Kali container:**
+- `execute_shell_cmd` — Run any shell command (nmap, hydra, sqlmap, etc.)
+- `write_file` — Write files to the container filesystem
+- `execute_script` — Execute Python/Bash scripts
+- `manage_packages` — Install/remove apt packages at runtime
+- `searchsploit_search` — Search ExploitDB for CVEs and exploits
+- `searchsploit_examine` — Read full exploit source code by EDB-ID
 
 ### RAG Memory System Setup
 
@@ -701,9 +739,12 @@ cd pentest-rag-memory
 npm install
 npm run seed  # Loads 7 initial anti-patterns
 
-# Build and start MCP server
-npm run build
-npm start
+# Build RAG Memory MCP server
+cd ../pentest-mcp-server/rag-memory-server-ts
+npm run build && yalc publish
+
+# In MVP repo:
+yalc add @cyber/mcp-rag-memory-client && npm install
 ```
 
 **Main Agent Integration:**
@@ -711,198 +752,150 @@ Session logs are automatically written to `logs/sessions/<session_id>.jsonl` for
 
 ## Testing MCP Integrations
 
+### Testing Kali MCP Server
+
+**Step 1: Start Kali Container**
+```bash
+cd /home/leo/mvp/docker && docker compose up kali -d
+```
+
+**Step 2: Test Connection**
+```bash
+npm run dev
+
+# In REPL:
+> autonomous "run nmap --version to verify"
+```
+
+**Expected Output:**
+```
+[DualMCPAgent] ✓ Kali MCP connected (6 tools discovered)
+[DualMCPAgent] Available tools: execute_shell_cmd, write_file, execute_script, manage_packages, searchsploit_search, searchsploit_examine
+```
+
 ### Testing RAG Memory Integration
 
-**Prerequisites:**
-- RAG Memory server built and ready
-- At least one playbook or anti-pattern seeded in ChromaDB
-- Environment variables configured
-
-**Step 1: Start RAG Memory Server**
+**Step 1: Ensure RAG Memory MCP server is configured**
 ```bash
-cd /home/leo/pentest-rag-memory
-npm start
-```
-
-Expected output:
-```
-RAG Memory MCP Server running on stdio
-ChromaDB initialized at ./data/chromadb
-Collection 'security_playbooks' ready (7 documents)
-```
-
-**Step 2: Configure and Start Main Agent** (in another terminal)
-```bash
-cd /home/leo/mvp
-
-# Set required environment variables
-export ANTHROPIC_API_KEY="your-api-key"
+export RAG_MEMORY_SERVER_PATH="../pentest-mcp-server/rag-memory-server-ts/dist/index.js"
 export ENABLE_RAG_MEMORY="true"
-export RAG_MEMORY_SERVER_PATH="/home/leo/pentest-rag-memory/dist/server/index.js"
-
-# Optional: Set other MCP server paths
-export NMAP_SERVER_PATH="/path/to/pentest-mcp-server/nmap-server-ts/dist/index.js"
-export SEARCHSPLOIT_SERVER_PATH="/path/to/pentest-mcp-server/searchsploit-server-ts/dist/index.js"
-
-# Start the agent
-npm start
 ```
 
-**Step 3: Test RAG Query**
-
-At the agent prompt, run reconnaissance on a target:
+**Step 2: Start Agent and Test**
 ```bash
-> recon <target-with-pfsense-or-known-services>
+npm run dev
+
+> recon <target-with-known-services>
 ```
 
 **Expected Output:**
-
 ```
-[Orchestrator] Initializing multi-agent system...
-[Orchestrator] ✓ Skills loaded
-[MCPAgent] ✓ Nmap server connected
-[MCPAgent] ✓ SearchSploit server connected
-[MCPAgent] ✓ RAG Memory server connected
-[Orchestrator] Ready!
-[Orchestrator] RAG Memory: Enabled (Playbooks + Anti-Patterns)
-
-... (reconnaissance starts) ...
-
-[Intelligence Layer] Starting parallel analysis...
-[VulnLookup] Searching SearchSploit for: pfsense 2.3.1
-[RAG Memory] Query: services: pfsense | vulnerabilities: CVE-2016-10709
+[DualMCPAgent] ✓ RAG Memory connected
 [RAG Memory] ✓ Found 2 playbooks, 1 anti-patterns
-
-[MEMORY RECALL - WARNINGS FROM PAST EXPERIENCE]
-[ANTI-PATTERN WARNING 1/1]
-⚠️ **Warning: Exploit-DB 39709**
-Target: pfsense
-Failure Reason: strict filtering
-...
-
-[KNOWN STRATEGIES - SIMILAR SCENARIOS]
-[STRATEGY 1/2]
-✅ **Strategy for pfsense**
-Vulnerability: CVE-2016-10709
-...
 ```
 
-### Testing SearchSploit Integration
-
-**Step 1: Verify ExploitDB Installed**
-```bash
-searchsploit --version
-# Should show: SearchSploit - Exploit Database Archive Search
-```
-
-**Step 2: Start SearchSploit MCP Server** (if not already running)
-```bash
-cd /path/to/pentest-mcp-server/searchsploit-server-ts
-npm run build
-npm start
-```
-
-**Step 3: Test Vulnerability Lookup**
-
-Run reconnaissance on a target with known services:
-```bash
-> recon <target-with-apache-or-other-services>
-```
-
-**Expected Output:**
-```
-[Intelligence Layer] Starting parallel analysis...
-[VulnLookup] Searching SearchSploit for: apache 2.4.49
-[VulnLookup] Found 3 exploits, 0 shellcodes for apache 2.4.49
-[Profiler] ✓ Profile: Linux - standard
-[VulnLookup] ✓ Found 3 vulnerabilities
-  - CVE-2021-41773 (critical)
-  - CVE-2021-42013 (critical)
-  - CVE-2020-11984 (high)
-```
-
-### Testing Nmap Integration
-
-**Step 1: Start Nmap MCP Server** (if not already running)
-```bash
-cd /path/to/pentest-mcp-server/nmap-server-ts
-npm run build
-npm start
-```
-
-**Step 2: Run Basic Reconnaissance**
-```bash
-> recon 192.168.1.1
-```
-
-**Expected Output:**
-```
-[Reasoner] 🧠 Planning reconnaissance for 192.168.1.1
-[Executor] 📋 Breaking down into tool steps...
-[MCPAgent] Executing: nmap_host_discovery
-[MCPAgent] Executing: nmap_port_scan
-[MCPAgent] Executing: nmap_service_detection
-[DataCleaner] ✓ Parsed 5 open ports
-```
-
-### Verifying All 3 MCP Servers
-
-**Full Integration Test:**
+### Testing Exploit Execution (New in v3.0)
 
 ```bash
-# Terminal 1: RAG Memory Server
-cd /home/leo/pentest-rag-memory && npm start
+# Start Kali container
+cd docker && docker compose up kali -d
 
-# Terminal 2: SearchSploit Server (optional)
-cd /path/to/pentest-mcp-server/searchsploit-server-ts && npm start
+# Start agent
+cd /home/leo/mvp && npm run dev
 
-# Terminal 3: Main Agent
-cd /home/leo/mvp
-export ENABLE_RAG_MEMORY="true"
-export RAG_MEMORY_SERVER_PATH="/home/leo/pentest-rag-memory/dist/server/index.js"
-export SEARCHSPLOIT_SERVER_PATH="/path/to/pentest-mcp-server/searchsploit-server-ts/dist/index.js"
-npm start
+# Test generate command
+> generate "create a port scanner for 192.168.1.1"
+
+# Test autonomous OODA loop
+> autonomous "scan 192.168.1.1 for web vulnerabilities"
+
+# Test plan-based execution
+> plan ./TacticalPlan.json
 ```
 
-**Initialization should show:**
-```
-[MCPAgent] ✓ Nmap server connected
-[MCPAgent] ✓ SearchSploit server connected
-[MCPAgent] ✓ RAG Memory server connected
+### Full Docker Pod Test
+
+```bash
+cd /home/leo/mvp/docker && docker compose up --build
+# Brain container connects to Kali container automatically
+# REPL starts in brain container
 ```
 
 ### Troubleshooting
 
+**Issue: "Kali MCP connection failed"**
+- Verify Kali container is running: `docker ps | grep pentest-kali`
+- Check Kali MCP server: `curl http://localhost:3001/mcp`
+- Verify `KALI_MCP_URL` environment variable
+
 **Issue: "RAG Memory client not initialized"**
 - Ensure `ENABLE_RAG_MEMORY="true"` is set
-- Verify `RAG_MEMORY_SERVER_PATH` points to correct server file
-- Check that RAG Memory server is running
-
-**Issue: "Unknown tool: searchsploit_search"**
-- Verify SearchSploit MCP server is running
-- Check `SEARCHSPLOIT_SERVER_PATH` environment variable
-- Ensure searchsploit CLI is installed: `which searchsploit`
+- Verify `RAG_MEMORY_SERVER_PATH` points to `../pentest-mcp-server/rag-memory-server-ts/dist/index.js`
+- NOT `../pentest-rag-memory/...` (that's the database, not the MCP server)
 
 **Issue: No RAG results found**
 - Check ChromaDB has documents: `npm run seed` in pentest-rag-memory
 - Verify query matches seeded service names (e.g., "pfsense", "apache")
-- Check RAG server logs for query processing
 
-## MCP Server Configuration
+## MCP Architecture
 
-### Local Development (Stdio)
+### Dual MCP Transport
 
-```typescript
-const nmapServerPath = '/path/to/pentest-mcp-server/nmap-server-ts/dist/index.js';
+```
+┌─────────────┐    stdio     ┌──────────────────────┐
+│  DualMCP    │──────────────│  RAG Memory Server   │
+│  Agent      │              │  (host, yalc client)  │
+│             │    HTTP      ┌──────────────────────┐
+│             │──────────────│  Kali MCP Server     │
+└─────────────┘   :3001      │  (Docker, FastMCP)    │
+                              └──────────────────────┘
 ```
 
-### Remote Mode (SSE) - Future
-
-```typescript
-const transport = new SSEClientTransport(new URL('https://your-mcp-server.com/sse'));
-```
+- **RAG Memory**: stdio transport via `@cyber/mcp-rag-memory-client` (yalc). Tools: `rag_recall`, `rag_query_playbooks`, `rag_store`
+- **Kali**: HTTP transport via `@modelcontextprotocol/sdk` StreamableHTTPClientTransport. Tools discovered dynamically at connection time.
 
 ## Changelog
+
+### 2026-02-13 - Dual MCP + Docker Architecture (v3.0)
+
+**Docker Deployment:**
+- **Brain Container**: Node 20 image running compiled TypeScript agent
+- **Kali Container**: Kali rolling image with FastMCP Python server (6 tools), exploitdb, nmap, and pentest tools
+- **Docker Compose**: Bridge network (`pentest-net`) for brain↔kali communication, named volumes for apt cache and scripts
+
+**Dual MCP Architecture:**
+- **DualMCPAgent**: Replaced 3 stdio MCP clients (Nmap, SearchSploit, RAG) with 2 clients:
+  - RAG Memory: stdio transport via `@cyber/mcp-rag-memory-client` (yalc, on host)
+  - Kali: HTTP transport via `@modelcontextprotocol/sdk` `StreamableHTTPClientTransport` (Docker container)
+- **Dynamic Tool Discovery**: Tools discovered at runtime via `kaliClient.listTools()` — replaces static `allowed_tools.json` whitelist
+- **Tool Routing**: `rag_*` tools → RAG client, all other tools → Kali client
+
+**AgenticExecutor (OODA Loop):**
+- Ported from `pentest-executor` project with full Langfuse tracing
+- Autonomous tool discovery, package installation, script generation, and execution
+- Methods: `generateScript()`, `autoExecute()`, `executeFinal()`, `runAgentLoop()`, `runAgentWithTacticalPlan()`
+- Dynamic `TOOL_DEFINITIONS` built from `mcpAgent.getKaliToolNames()` + host-local skill tools
+
+**6 New CLI Commands:**
+- `generate <task>` — Generate PoC script with Claude
+- `execute <filename>` — Run script in Kali container
+- `interactive <task>` — Generate, review/edit, execute
+- `autorun <task>` — Generate + write + execute automatically
+- `plan <json-file>` — Load Tactical Plan with 4 strategy options (tool-based, GitHub PoC, manual, interactive)
+- `autonomous <task>` — Full agentic OODA loop
+
+**Unified SkillManager:**
+- Merged MVP's `skills-loader.ts` + pentest-executor's `skills.ts`
+- Tool-callable methods: `listSkills()`, `readSkillFile()`, `saveNewSkill()`, `buildSkillsPromptSection()`
+- Reasoner context: `buildSkillContext()` with keyword matching
+- Memory: `addRule()`, `removeRule()`, `listRules()`, `buildRulesPromptSection()`
+
+**Dependency Changes:**
+- Added: `@modelcontextprotocol/sdk` (^1.26.0) for HTTP MCP transport
+- Removed: `@cyber/mcp-nmap-client`, `@cyber/mcp-searchsploit-client` (replaced by Kali container)
+- Kept: `@cyber/mcp-rag-memory-client` (stdio transport for RAG)
+
+---
 
 ### 2026-02-08 - Observability & Safety Hardening (v2.2)
 
@@ -1144,8 +1137,8 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 
 ## Implementation Status
 
-**Architecture Version**: 2.2 (Observability & Safety Hardening)
-**Completion**: Phase 1-7 ✅ Complete + Agent Loop Hardening ✅ + Observability & Safety ✅
+**Architecture Version**: 3.0 (Dual MCP + Docker Architecture)
+**Completion**: Phase 1-7 ✅ + Agent Loop Hardening ✅ + Observability ✅ + Docker + Dual MCP + OODA Loop ✅
 
 ### Summary (Phase 1-7)
 
@@ -1160,45 +1153,22 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 | **Phase 6** | Evaluator Agent | ✅ Complete | TP/FP/FN/TN labeling, prediction comparison, training data generation |
 | **Phase 7** | Orchestrator Integration | ✅ Complete | Parallel intelligence execution, RAG memory recall, evaluation loop, training data persistence |
 
-### Recent Enhancements (2026-02-08)
+### Recent Enhancements (2026-02-13)
 
-**Observability & Safety Hardening (v2.2)**:
-- ✅ **Langfuse Tracing**: OpenTelemetry + Langfuse span processor for full reconnaissance observability
-- ✅ **Duplicate Operation Detection**: Command signature tracking with generic behavioral loop intervention
-- ✅ **Database Exhaustion Detection**: Negative keyword analysis with advisory injection for empty results
-- ✅ **Dynamic Tool Whitelist**: JSON config as single source of truth, tactical plan + LLM validation
-- ✅ **RAG Memory Refactoring**: `recallInternalWarnings` (Phase 0) + `searchHandbook` (Phase 4b) replacing raw MCP calls
-- ✅ **OS Detection**: `nmap_os_detection` across server, client SDK, and agent
-- ✅ **Parameter Fix**: `top_k` → `n_results` for `rag_query_playbooks`
+**Dual MCP + Docker Architecture (v3.0)**:
+- ✅ **Docker Deployment**: Brain + Kali containers on bridge network with Docker Compose
+- ✅ **DualMCPAgent**: RAG (stdio, host) + Kali (HTTP, Docker) replacing 3 stdio servers
+- ✅ **AgenticExecutor**: OODA loop engine for autonomous exploit execution
+- ✅ **6 New CLI Commands**: generate, execute, interactive, autorun, plan, autonomous
+- ✅ **Dynamic Tool Discovery**: Runtime tool list via `kaliClient.listTools()`
+- ✅ **Unified SkillManager**: Merged skill loading + memory + tool-callable methods
 
-**Agent Loop Hardening (v2.1)**:
-- ✅ **Tactical Plan Passthrough**: Executor uses Reasoner's tactical plan directly, bypassing redundant LLM call
-- ✅ **Tool Whitelist**: `ALLOWED_TOOLS` Set + post-LLM validation filters hallucinated tool names
-- ✅ **Explicit Failure Feedback**: Failed tools reported to Reasoner with "WARNING — N tool(s) FAILED" context
-- ✅ **Service Deduplication**: `host:port` dedup prevents context bloat from redundant scans
-- ✅ **Fingerprint Parsing Skills**: Dynamic skill injection into DataCleaner for technology identification (15+ rules)
-
-**Layered Architecture Refactoring (v2.0)**:
-- ✅ Migrated from flat structure to 5-layer architecture (core, intelligence, knowledge, execution, utils)
-- ✅ Preserved git history via `git mv` for all file relocations
-- ✅ Added barrel exports (`index.ts`) for clean imports
-- ✅ Created README.md in each layer documenting purpose and dependencies
-
-**Intelligence Phase Robustness**:
-- ✅ **Incremental Intelligence Analysis**: Tracks analyzed services via fingerprints, only analyzes NEW services
-- ✅ **Intelligent Merging**: Deduplicates vulnerabilities by CVE ID across iterations
-- ✅ **Retry Mechanism**: Exponential backoff (max 2 retries, 1s/2s delays) for transient failures
-- ✅ **~67% Failure Recovery**: Handles network issues, API rate limits, server hiccups automatically
-
-**Orchestrator Refactoring**:
-- ✅ Main loop reduced from ~250 lines to ~70 lines (72% reduction)
-- ✅ 8 private helper methods for clean phase separation
-- ✅ 2 utility helpers: `createServiceFingerprint()`, `retryWithBackoff<T>()`
-- ✅ ~420 lines of comprehensive JSDoc documentation
-
-**New Utilities**:
-- ✅ **TokenMonitor** (`utils/token-monitor.ts`): Tracks token consumption, costs per agent/model
-- ✅ **SessionLogger** (`utils/session-logger.ts`): JSONL logging for ETL pipeline (pentest-data-refinery)
+**Previous Enhancements**:
+- ✅ **Langfuse Tracing**: OpenTelemetry + Langfuse span processor for observability
+- ✅ **Duplicate Operation Detection**: Command signature tracking with loop intervention
+- ✅ **Tactical Plan Passthrough**: Executor uses Reasoner's plan directly
+- ✅ **Incremental Intelligence**: Fingerprint tracking, CVE dedup, retry with backoff
+- ✅ **5-Layer Architecture**: Core, intelligence, knowledge, execution, utils
 
 ### 📦 External Dependencies (Separate Repositories)
 
@@ -1215,33 +1185,29 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 
 ## Next Steps
 
-1. **End-to-End Testing**: Test full Intelligence + Evaluation pipeline
-   - Run reconnaissance on test targets
-   - Verify tactical plan generation with prediction metrics
-   - Validate evaluation loop execution and training data collection
-   - Check session logging for RAG ETL consumption
+1. **Docker Pod Testing**: Verify full brain↔kali communication
+   - Build and start Docker Compose pod
+   - Test all 6 CLI commands against Kali container
+   - Verify RAG Memory stdio works inside brain container
 
-2. **Deploy SearchSploit MCP**: Set up SearchSploit server for vulnerability lookups
-   - Install ExploitDB locally
-   - Configure SearchSploit MCP server path
-   - Test VulnLookup agent integration
+2. **OODA Loop Validation**: Test AgenticExecutor against real targets
+   - Test `autonomous` command with CVE exploitation tasks
+   - Test `plan` command with tactical plan files
+   - Verify Langfuse tracing captures all OODA turns
 
-3. **RAG Memory System**: Complete ETL pipeline and MCP server (separate repo)
-   - Implement ETL pipeline to process session JSONL logs
-   - Extract anti-patterns from failed attack attempts
-   - Build RAG MCP server for memory recall
-   - Test memory injection into Reasoner context
+3. **RAG Memory ETL Pipeline**: Complete learning loop
+   - Process session JSONL logs into anti-patterns
+   - Extract successful techniques as new playbooks
+   - Test memory injection improves future sessions
 
 4. **Training Data Pipeline**: Set up RLHF/fine-tuning workflow
-   - Process collected training pairs
-   - Build preference datasets from evaluation labels
-   - Integrate with model training infrastructure
+   - Process collected training pairs from evaluation loop
+   - Build preference datasets from TP/FP/FN/TN labels
    - Measure model improvement over time
 
-5. **Production Hardening**: Optimize for real-world usage
-   - Error handling and retry logic
-   - Rate limiting and cost controls
-   - Multi-target parallel reconnaissance
+5. **Multi-Tenant Deployment**: Scale to parallel engagements
+   - Multiple Kali containers per engagement
+   - Shared RAG Memory across sessions
    - Result aggregation and reporting
 
 ---

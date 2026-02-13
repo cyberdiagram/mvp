@@ -13,7 +13,7 @@
  */
 
 import { DiscoveredService, TargetProfile, VulnerabilityInfo } from '../core/types.js';
-import { MCPAgent } from '../execution/mcp-agent.js';
+import { DualMCPAgent } from '../execution/mcp-agent.js';
 
 /**
  * SearchSploit search result from MCP server.
@@ -82,21 +82,21 @@ interface SearchSploitExploit {
  * - Severity inference from exploit type and platform
  *
  * Connection Flow:
- *   VulnLookupAgent → MCPAgent → SearchSploit MCP Server → searchsploit CLI → ExploitDB (local)
+ *   VulnLookupAgent → DualMCPAgent → SearchSploit MCP Server → searchsploit CLI → ExploitDB (local)
  *
  * Note: This is NOT the RAG memory system. This agent performs exploit lookups.
  * For learned anti-patterns from past sessions, see the RAG Memory System (Phase 4b).
  */
 export class VulnLookupAgent {
   /** Shared MCP agent for tool execution */
-  private mcpAgent: MCPAgent;
+  private mcpAgent: DualMCPAgent;
 
   /**
    * Creates a new VulnLookupAgent.
    *
-   * @param mcpAgent - Shared MCPAgent instance for executing SearchSploit tools
+   * @param mcpAgent - Shared DualMCPAgent instance for executing SearchSploit tools
    */
-  constructor(mcpAgent: MCPAgent) {
+  constructor(mcpAgent: DualMCPAgent) {
     this.mcpAgent = mcpAgent;
   }
 

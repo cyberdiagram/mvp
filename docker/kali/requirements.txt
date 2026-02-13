@@ -1,0 +1,4 @@
+mcp[http]
+uvicorn
+requests
+pwntools

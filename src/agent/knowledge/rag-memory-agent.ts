@@ -11,7 +11,7 @@
  * @module agent/definitions/rag-memory-agent
  */
 
-import { MCPAgent } from '../execution/mcp-agent.js';
+import { DualMCPAgent } from '../execution/mcp-agent.js';
 
 /**
  * Playbook/Anti-Pattern document from RAG memory
@@ -62,14 +62,14 @@ export interface RAGMemoryResult {
  * - Type: anti_pattern → Failed exploits with alternatives
  */
 export class RAGMemoryAgent {
-  private mcpAgent: MCPAgent;
+  private mcpAgent: DualMCPAgent;
 
   /**
    * Creates a new RAG Memory Agent.
    *
    * @param mcpAgent - MCP agent for tool execution
    */
-  constructor(mcpAgent: MCPAgent) {
+  constructor(mcpAgent: DualMCPAgent) {
     this.mcpAgent = mcpAgent;
   }
 

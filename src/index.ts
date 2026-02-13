@@ -1,35 +1,21 @@
 /**
  * Main Entry Point - Interactive CLI for the Pentest Agent.
  *
- * This module provides a user-input based interface that supports:
+ * Supports:
  * 1. **Reconnaissance Commands**: `recon <target>` or direct IP/hostname input
- * 2. **Memory Manager Commands**: `remember`, `forget`, `rules`
- * 3. **Interactive Mode**: Continuous input loop with command history
- *
- * The Memory Manager follows Anthropic's Claude Code architecture pattern,
- * allowing users to persist tool preferences (e.g., "always use -Pn with nmap").
- *
- * @module index
- * @author Leo
- * @version 1.1
- * @date 2026-02-05
+ * 2. **Exploit Execution Commands**: generate, execute, interactive, autorun, plan, autonomous
+ * 3. **Memory Manager Commands**: `remember`, `forget`, `rules`
+ * 4. **Interactive Mode**: Continuous input loop with command history
  */
 
 import 'dotenv/config';
-// Instrumentation MUST be imported before application modules
-// to capture all OpenTelemetry spans from startup
 import { shutdownTracing } from './instrumentation.js';
 import path from 'path';
+import * as fs from 'fs';
 import * as readline from 'readline';
 import { PentestAgent } from './agent/index.js';
+import type { TacticalPlanObject } from './agent/core/types.js';
 
-/**
- * Displays the welcome banner and available commands.
- *
- * Shows ASCII art logo and lists all available commands with descriptions.
- *
- * @returns {void}
- */
 function displayBanner(): void {
   console.log('\n');
   console.log('  ██████╗ ███████╗███╗   ██╗████████╗███████╗███████╗████████╗');
@@ -38,50 +24,51 @@ function displayBanner(): void {
   console.log('  ██╔═══╝ ██╔══╝  ██║╚██╗██║   ██║   ██╔══╝  ╚════██║   ██║   ');
   console.log('  ██║     ███████╗██║ ╚████║   ██║   ███████╗███████║   ██║   ');
   console.log('  ╚═╝     ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚══════╝   ╚═╝   ');
-  console.log('                    AI-Powered Penetration Testing Agent v1.0');
+  console.log('                    AI-Powered Penetration Testing Agent v2.0');
   console.log('');
   console.log('─'.repeat(65));
   console.log('');
-  console.log('  Commands:');
-  console.log('    recon <target>          - Run reconnaissance on target');
-  console.log('    remember <tool> <rule>  - Save a tool preference (Memory Manager)');
-  console.log('    forget <tool>           - Clear all preferences for a tool');
-  console.log('    rules [tool]            - List saved rules/preferences');
-  console.log('    help                    - Show this help message');
-  console.log('    exit                    - Quit the application');
+  console.log('  === Reconnaissance ===');
+  console.log('    recon <target>            Run automated reconnaissance');
   console.log('');
-  console.log('  Tips:');
-  console.log('    - Enter an IP address directly to start reconnaissance');
-  console.log('    - Use "remember nmap use -Pn" to save preferences');
+  console.log('  === Exploit Execution ===');
+  console.log('    generate <task>           Generate a PoC script with Claude');
+  console.log('    execute <filename>        Run an existing script in Kali container');
+  console.log('    interactive <task>        Generate, review/edit, then execute');
+  console.log('    autorun <task>            Generate + write + execute automatically');
+  console.log('    plan <json-file>          Load Tactical Plan and choose strategy');
+  console.log('    autonomous <task>         Full agentic OODA loop');
+  console.log('');
+  console.log('  === Memory ===');
+  console.log('    remember <tool> <rule>    Save a tool preference');
+  console.log('    forget <tool>             Clear preferences for a tool');
+  console.log('    rules [tool]              List saved preferences');
+  console.log('');
+  console.log('  === System ===');
+  console.log('    help                      Show this help');
+  console.log('    exit                      Quit');
   console.log('');
   console.log('─'.repeat(65));
 }
 
-/**
- * Displays the help message with all available commands.
- *
- * Shows detailed descriptions and examples for each command.
- *
- * @returns {void}
- */
 function displayHelp(): void {
   console.log('\n  Available Commands:\n');
   console.log('  Reconnaissance:');
   console.log('    recon <target>    - Run automated reconnaissance');
   console.log('                        Example: recon 192.168.1.0/24');
-  console.log('                        Example: recon scanme.nmap.org');
   console.log('');
-  console.log('  Memory Manager (Preference Persistence):');
+  console.log('  Exploit Execution:');
+  console.log('    generate <task>       - Generate a Python PoC script');
+  console.log('    execute <filename>    - Execute a script already in Kali');
+  console.log('    interactive <task>    - Generate → review/edit → execute');
+  console.log('    autorun <task>        - Generate → write → execute (no review)');
+  console.log('    plan <json-file>      - Load Tactical Plan, choose strategy');
+  console.log('    autonomous <task>     - Full OODA agentic loop');
+  console.log('');
+  console.log('  Memory Manager:');
   console.log('    remember <tool> <rule>  - Save a tool preference');
-  console.log('                              Example: remember nmap always use -Pn after discovery');
-  console.log('                              Example: remember gobuster use -t 50 threads');
-  console.log('');
   console.log('    forget <tool>           - Clear all preferences for a tool');
-  console.log('                              Example: forget nmap');
-  console.log('');
   console.log('    rules [tool]            - List saved preferences');
-  console.log('                              Example: rules       (list all)');
-  console.log('                              Example: rules nmap  (list nmap rules only)');
   console.log('');
   console.log('  Other:');
   console.log('    help              - Show this help message');
@@ -89,116 +76,82 @@ function displayHelp(): void {
   console.log('');
   console.log('  Quick Input:');
   console.log('    <IP or hostname>  - Automatically runs recon on the target');
-  console.log('                        Example: 192.168.1.10');
-  console.log('                        Example: example.com');
   console.log('');
 }
 
-/**
- * Checks if input looks like a target (IP address or hostname).
- *
- * Used to detect when user enters a target directly without the "recon" command.
- *
- * @param {string} input - The user input to check
- * @returns {boolean} True if the input looks like a valid target
- *
- * @example
- * isTarget('192.168.1.1');    // true
- * isTarget('scanme.nmap.org'); // true
- * isTarget('remember');        // false
- */
 function isTarget(input: string): boolean {
-  // Check for IP address pattern (with optional CIDR)
   const ipPattern = /^[\d.\/]+$/;
-  if (ipPattern.test(input)) {
-    return true;
-  }
+  if (ipPattern.test(input)) return true;
 
-  // Check for hostname (contains dot but doesn't start with common commands)
-  const commands = ['recon', 'remember', 'forget', 'rules', 'help', 'exit', 'quit'];
+  const commands = [
+    'recon', 'remember', 'forget', 'rules', 'help', 'exit', 'quit',
+    'generate', 'execute', 'interactive', 'autorun', 'plan', 'autonomous',
+  ];
   const firstWord = input.split(' ')[0].toLowerCase();
 
-  if (input.includes('.') && !commands.includes(firstWord)) {
-    return true;
-  }
-
+  if (input.includes('.') && !commands.includes(firstWord)) return true;
   return false;
 }
 
+function separator(): void {
+  console.log('\n' + '='.repeat(60) + '\n');
+}
+
 /**
- * Handles the "remember" command to add a new tool preference.
- *
- * Parses the command arguments and calls the Memory Manager's addRule method.
- *
- * @param {PentestAgent} agent - The pentest agent instance
- * @param {string[]} args - Command arguments [tool, ...rule words]
- * @returns {void}
- *
- * @example
- * handleRemember(agent, ['nmap', 'always', 'use', '-Pn']);
- * // Adds rule: "always use -Pn" for nmap
+ * Loads a Tactical Plan JSON file and validates required fields.
  */
+function loadTacticalPlan(filePath: string): TacticalPlanObject {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  const plan = JSON.parse(raw) as TacticalPlanObject;
+
+  if (!plan.target_ip) throw new Error("Invalid plan: missing 'target_ip'");
+  if (!plan.attack_vectors || plan.attack_vectors.length === 0) {
+    throw new Error("Invalid plan: missing 'attack_vectors'");
+  }
+  return plan;
+}
+
+/**
+ * Prompts the user with a question and returns their input.
+ */
+function ask(rl: readline.Interface, prompt: string): Promise<string> {
+  return new Promise((resolve) => rl.question(prompt, resolve));
+}
+
+// ─── Memory Manager Handlers ─────────────────────────────────
+
 function handleRemember(agent: PentestAgent, args: string[]): void {
   if (args.length < 2) {
     console.log('\n  Usage: remember <tool> <rule>');
     console.log('  Example: remember nmap always use -Pn after host discovery\n');
     return;
   }
-
   const tool = args[0];
   const rule = args.slice(1).join(' ');
-
   agent.skillsLoader.addRule(tool, rule);
-  console.log(`\n  ✓ Rule saved for ${tool}: "${rule}"\n`);
+  console.log(`\n  Rule saved for ${tool}: "${rule}"\n`);
 }
 
-/**
- * Handles the "forget" command to clear all rules for a tool.
- *
- * Removes all preferences associated with the specified tool.
- *
- * @param {PentestAgent} agent - The pentest agent instance
- * @param {string[]} args - Command arguments [tool]
- * @returns {void}
- *
- * @example
- * handleForget(agent, ['nmap']);
- * // Clears all rules for nmap
- */
 function handleForget(agent: PentestAgent, args: string[]): void {
   if (args.length < 1) {
     console.log('\n  Usage: forget <tool>');
-    console.log('  Example: forget nmap\n');
     return;
   }
-
   const tool = args[0];
   const count = agent.skillsLoader.clearRules(tool);
-
   if (count > 0) {
-    console.log(`\n  ✓ Cleared ${count} rule(s) for ${tool}\n`);
+    console.log(`\n  Cleared ${count} rule(s) for ${tool}\n`);
   } else {
     console.log(`\n  No rules found for ${tool}\n`);
   }
 }
 
-/**
- * Handles the "rules" command to list saved preferences.
- *
- * Displays all rules or rules for a specific tool in a formatted list.
- *
- * @param {PentestAgent} agent - The pentest agent instance
- * @param {string[]} args - Command arguments [optional tool]
- * @returns {void}
- *
- * @example
- * handleRules(agent, []);        // List all rules
- * handleRules(agent, ['nmap']);  // List nmap rules only
- */
 function handleRules(agent: PentestAgent, args: string[]): void {
   const toolFilter = args[0];
   const rules = agent.skillsLoader.listRules(toolFilter);
-
   const toolNames = Object.keys(rules);
 
   if (toolNames.length === 0) {
@@ -212,121 +165,277 @@ function handleRules(agent: PentestAgent, args: string[]): void {
 
   console.log('\n  Saved Rules:');
   console.log('  ' + '─'.repeat(50));
-
   for (const [tool, toolRules] of Object.entries(rules)) {
     if (toolRules.length === 0) continue;
-
     console.log(`\n  ${tool}:`);
     toolRules.forEach((rule, index) => {
       console.log(`    ${index}. ${rule}`);
     });
   }
-
   console.log('');
 }
 
-/**
- * Main entry point for the pentest agent CLI.
- *
- * This function:
- * 1. Loads configuration from environment variables
- * 2. Creates and initializes the PentestAgent
- * 3. Starts an interactive input loop
- * 4. Processes user commands (recon, remember, forget, rules, etc.)
- * 5. Handles graceful shutdown
- *
- * Environment Variables:
- * - ANTHROPIC_API_KEY: Claude API key (required)
- * - NMAP_SERVER_PATH: Path to nmap MCP server (optional)
- * - SEARCHSPLOIT_SERVER_PATH: Path to SearchSploit MCP server (optional)
- * - RAG_MEMORY_SERVER_PATH: Path to RAG memory MCP server (optional)
- * - ENABLE_EVALUATION: Enable evaluation loop and training data collection (optional)
- * - ENABLE_RAG_MEMORY: Enable RAG memory recall before decisions (optional)
- * - TRAINING_DATA_PATH: Directory for training data JSON files (optional)
- * - SESSION_LOGS_PATH: Directory for session JSONL logs (optional)
- *
- * @async
- * @returns {Promise<void>}
- */
+// ─── Exploit Execution Handlers ──────────────────────────────
+
+async function handleGenerate(agent: PentestAgent, args: string[]): Promise<void> {
+  if (!agent.agenticExecutor) {
+    console.log('\n  Error: Kali MCP server not connected. Cannot generate scripts.\n');
+    return;
+  }
+  if (args.length === 0) {
+    console.log('\n  Usage: generate <task description>');
+    return;
+  }
+  const task = args.join(' ');
+  console.log('\nGenerating script...\n');
+  const script = await agent.agenticExecutor.generateScript(task);
+  separator();
+  console.log('--- Generated Script ---');
+  console.log(script);
+  separator();
+}
+
+async function handleExecute(agent: PentestAgent, rl: readline.Interface, args: string[]): Promise<void> {
+  if (!agent.agenticExecutor) {
+    console.log('\n  Error: Kali MCP server not connected.\n');
+    return;
+  }
+  if (args.length === 0) {
+    console.log('\n  Usage: execute <filename>');
+    return;
+  }
+  const filename = args[0];
+  console.log(`\nExecuting ${filename} in Kali container...\n`);
+
+  const result = await agent.agenticExecutor.runAgentLoop(
+    `Execute the existing script file "${filename}" in the Kali container using execute_script tool.`,
+    3
+  );
+  separator();
+  console.log('--- Execution Result ---');
+  console.log(result.finalText);
+  separator();
+}
+
+async function handleInteractive(agent: PentestAgent, rl: readline.Interface, args: string[]): Promise<void> {
+  if (!agent.agenticExecutor) {
+    console.log('\n  Error: Kali MCP server not connected.\n');
+    return;
+  }
+  if (args.length === 0) {
+    console.log('\n  Usage: interactive <task description>');
+    return;
+  }
+  const task = args.join(' ');
+  const localTmpFile = './.tmp_payload.py';
+
+  console.log('\nGenerating script...\n');
+  const script = await agent.agenticExecutor.generateScript(task);
+  fs.writeFileSync(localTmpFile, script);
+
+  console.log(`[!] Payload generated and saved to ${localTmpFile}`);
+  console.log('[!] Please review/edit the script in your editor.');
+  await ask(rl, '\nPress Enter when ready to EXECUTE...');
+
+  const finalScript = fs.readFileSync(localTmpFile, 'utf-8');
+  const { filename, result } = await agent.agenticExecutor.executeFinal(finalScript);
+
+  separator();
+  console.log(`Script: ${filename}`);
+  console.log('--- Final Script ---');
+  console.log(finalScript);
+  separator();
+  console.log('--- Execution Result ---');
+  console.log(result);
+  separator();
+}
+
+async function handleAutorun(agent: PentestAgent, args: string[]): Promise<void> {
+  if (!agent.agenticExecutor) {
+    console.log('\n  Error: Kali MCP server not connected.\n');
+    return;
+  }
+  if (args.length === 0) {
+    console.log('\n  Usage: autorun <task description>');
+    return;
+  }
+  const task = args.join(' ');
+  const { script, filename, result } = await agent.agenticExecutor.autoExecute(task);
+  separator();
+  console.log(`Script: ${filename}`);
+  console.log('--- Generated Script ---');
+  console.log(script);
+  separator();
+  console.log('--- Execution Result ---');
+  console.log(result);
+  separator();
+}
+
+async function handlePlan(agent: PentestAgent, rl: readline.Interface, args: string[]): Promise<void> {
+  if (!agent.agenticExecutor) {
+    console.log('\n  Error: Kali MCP server not connected.\n');
+    return;
+  }
+  if (args.length === 0) {
+    console.log('\n  Usage: plan <path-to-tactical-plan.json>');
+    return;
+  }
+
+  const plan = loadTacticalPlan(args[0].trim());
+  const v = plan.attack_vectors[0];
+  const cls = v.prediction_metrics.classification;
+  const hyp = v.prediction_metrics.hypothesis;
+
+  console.log(`\n[+] Loaded plan: ${plan.plan_id}`);
+  console.log(`[+] Target: ${plan.target_ip}`);
+  console.log(`[+] Attack vectors: ${plan.attack_vectors.length}`);
+  console.log(`[+] Primary vector: ${cls.cve_id || 'N/A'} (${cls.attack_type})`);
+  console.log(`[+] MITRE ATT&CK: ${cls.mitre_id}`);
+  console.log(
+    `[+] Confidence: ${(hyp.confidence_score * 100).toFixed(0)}% | Expected success: ${hyp.expected_success}`
+  );
+  console.log(`[+] Rationale: ${hyp.rationale_tags.join(', ')}`);
+  console.log(`[+] Tool: ${v.action.tool_name}`);
+  separator();
+
+  const mode = await ask(
+    rl,
+    'Select execution strategy:\n  1. Tool-based Autonomy (Metasploit, etc.)\n  2. GitHub PoC Search & Execute\n  3. Manual Construction (Auto-code generation)\n  4. Interactive (Generate, Review, Execute)\nChoice: '
+  );
+
+  switch (mode.trim()) {
+    case '1': {
+      console.log('\nStarting tool-based autonomous execution...\n');
+      const result = await agent.agenticExecutor!.runAgentWithTacticalPlan(plan, 'tool');
+      separator();
+      console.log('--- Agent Summary ---');
+      console.log(`Turns used: ${result.turnsUsed}`);
+      console.log(`Tool calls: ${result.toolCalls.length}`);
+      separator();
+      console.log('--- Final Report ---');
+      console.log(result.finalText);
+      break;
+    }
+    case '2': {
+      console.log('\nStarting GitHub-based autonomous execution...\n');
+      const result = await agent.agenticExecutor!.runAgentWithTacticalPlan(plan, 'github');
+      separator();
+      console.log('--- Agent Summary ---');
+      console.log(`Turns used: ${result.turnsUsed}`);
+      console.log(`Tool calls: ${result.toolCalls.length}`);
+      separator();
+      console.log('--- Final Report ---');
+      console.log(result.finalText);
+      break;
+    }
+    case '3': {
+      const { script, filename, result } = await agent.agenticExecutor!.autoExecuteFromPlan(plan);
+      separator();
+      console.log(`Script: ${filename}`);
+      console.log('--- Generated Script ---');
+      console.log(script);
+      separator();
+      console.log('--- Execution Result ---');
+      console.log(result);
+      break;
+    }
+    case '4': {
+      console.log('\nGenerating exploit from Tactical Plan...\n');
+      const script = await agent.agenticExecutor!.generateScriptFromPlan(plan);
+      const localTmpFile = './.tmp_payload.py';
+      fs.writeFileSync(localTmpFile, script);
+      console.log(`[!] Payload generated and saved to ${localTmpFile}`);
+      console.log('[!] Please review/edit the script in your editor.');
+      await ask(rl, '\nPress Enter when ready to EXECUTE...');
+      const finalScript = fs.readFileSync(localTmpFile, 'utf-8');
+      const { filename, result } = await agent.agenticExecutor!.executeFinal(finalScript);
+      separator();
+      console.log(`Script: ${filename}`);
+      console.log('--- Final Script ---');
+      console.log(finalScript);
+      separator();
+      console.log('--- Execution Result ---');
+      console.log(result);
+      break;
+    }
+    default:
+      console.log('Invalid strategy selected.');
+  }
+  separator();
+}
+
+async function handleAutonomous(agent: PentestAgent, rl: readline.Interface, args: string[]): Promise<void> {
+  if (!agent.agenticExecutor) {
+    console.log('\n  Error: Kali MCP server not connected.\n');
+    return;
+  }
+  if (args.length === 0) {
+    console.log('\n  Usage: autonomous <task description>');
+    return;
+  }
+  const task = args.join(' ');
+  const maxTurnsStr = await ask(rl, 'Max turns (default 15): ');
+  const maxTurns = parseInt(maxTurnsStr) || 15;
+
+  console.log(`\nStarting autonomous agent (max ${maxTurns} turns)...\n`);
+  const result = await agent.agenticExecutor.runAgentLoop(task, maxTurns);
+  separator();
+  console.log('--- Agent Summary ---');
+  console.log(`Turns used: ${result.turnsUsed}`);
+  console.log(`Tool calls: ${result.toolCalls.length}`);
+  console.log(`Tools used: ${[...new Set(result.toolCalls.map((t) => t.name))].join(', ')}`);
+  separator();
+  console.log('--- Final Report ---');
+  console.log(result.finalText);
+  separator();
+}
+
+// ─── Main ────────────────────────────────────────────────────
+
 async function main(): Promise<void> {
-  // Load configuration from environment
-  const nmapPath =
-    process.env.NMAP_SERVER_PATH ||
-    path.resolve('../pentest-mcp-server/nmap-server-ts/dist/index.js');
-
-  const searchsploitPath =
-    process.env.SEARCHSPLOIT_SERVER_PATH ||
-    path.resolve('../pentest-mcp-server/searchsploit-server-ts/dist/index.js');
-
-  const ragMemoryPath = process.env.RAG_MEMORY_SERVER_PATH;
-
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicApiKey) {
     console.error('Error: ANTHROPIC_API_KEY environment variable is required');
     process.exit(1);
   }
 
-  // Build configuration object
+  const ragMemoryPath = process.env.RAG_MEMORY_SERVER_PATH;
+  const kaliMcpUrl = process.env.KALI_MCP_URL || 'http://localhost:3001';
+
   const config = {
     anthropicApiKey,
     skillsDir: path.resolve('./src/skills'),
-    mcpServers: {
-      nmap: {
-        path: nmapPath,
-      },
-      searchsploit: {
-        path: searchsploitPath,
-      },
-      ...(ragMemoryPath && {
-        rag_memory: {
-          path: ragMemoryPath,
-        },
-      }),
-    },
+    kaliMcpUrl,
+    ragMemoryServerPath: ragMemoryPath,
     enableEvaluation: process.env.ENABLE_EVALUATION === 'true',
     enableRAGMemory: process.env.ENABLE_RAG_MEMORY === 'true' && !!ragMemoryPath,
     trainingDataPath: process.env.TRAINING_DATA_PATH || './logs/training_data',
     sessionLogsPath: process.env.SESSION_LOGS_PATH || './logs/sessions',
   };
 
-  // Create and initialize agent
   const agent = new PentestAgent(config);
   await agent.initialize();
 
-  // Display welcome banner
   displayBanner();
 
-  // Create readline interface for user input
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
 
-  /**
-   * Main command processing loop.
-   *
-   * Reads user input, parses commands, and dispatches to handlers.
-   * Continues until user types "exit" or "quit".
-   *
-   * @returns {void}
-   */
   const prompt = (): void => {
     rl.question('\n> ', async (input: string) => {
       const trimmed = input.trim();
-
-      // Handle empty input
       if (!trimmed) {
         prompt();
         return;
       }
 
-      // Parse command and arguments
       const [command, ...args] = trimmed.split(' ');
       const lowerCommand = command.toLowerCase();
 
       try {
         switch (lowerCommand) {
-          // Exit commands
           case 'exit':
           case 'quit':
             console.log('\n  Shutting down...');
@@ -335,32 +444,53 @@ async function main(): Promise<void> {
             rl.close();
             process.exit(0);
 
-          // Help command
           case 'help':
             displayHelp();
             break;
 
-          // Reconnaissance command
+          // === Reconnaissance ===
           case 'recon':
             if (args[0]) {
               await agent.reconnaissance(args[0]);
             } else {
-              console.log('\n  Usage: recon <target>');
-              console.log('  Example: recon 192.168.1.0/24\n');
+              console.log('\n  Usage: recon <target>\n');
             }
             break;
 
-          // Memory Manager: Remember
+          // === Exploit Execution ===
+          case 'generate':
+            await handleGenerate(agent, args);
+            break;
+
+          case 'execute':
+            await handleExecute(agent, rl, args);
+            break;
+
+          case 'interactive':
+            await handleInteractive(agent, rl, args);
+            break;
+
+          case 'autorun':
+            await handleAutorun(agent, args);
+            break;
+
+          case 'plan':
+            await handlePlan(agent, rl, args);
+            break;
+
+          case 'autonomous':
+            await handleAutonomous(agent, rl, args);
+            break;
+
+          // === Memory Manager ===
           case 'remember':
             handleRemember(agent, args);
             break;
 
-          // Memory Manager: Forget
           case 'forget':
             handleForget(agent, args);
             break;
 
-          // Memory Manager: Rules
           case 'rules':
             handleRules(agent, args);
             break;
@@ -368,7 +498,6 @@ async function main(): Promise<void> {
           // Default: Check if input looks like a target
           default:
             if (isTarget(trimmed)) {
-              // Treat as reconnaissance target
               await agent.reconnaissance(trimmed);
             } else {
               console.log(`\n  Unknown command: ${command}`);
@@ -380,16 +509,13 @@ async function main(): Promise<void> {
         console.error(`\n  Error: ${errorMessage}\n`);
       }
 
-      // Continue the loop
       prompt();
     });
   };
 
-  // Start the interactive prompt
   prompt();
 }
 
-// Run main function
 main().catch((error) => {
   console.error('Fatal error:', error);
   process.exit(1);
