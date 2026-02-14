@@ -1216,103 +1216,97 @@ Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTIC
 
 ### Code Metrics (Lines of Code)
 
-**✨ Updated for Agent Loop Hardening v2.1 (2026-02-08)**
+**✨ Updated for Legacy Cleanup & Restructure v3.1 (2026-02-14)**
 
-#### Core Agent System (5,527 lines total)
+#### Core Agent System (6,667 lines total)
 
-**Core Orchestration Layer** (1,815 lines):
+**Core Orchestration Layer** (1,918 lines):
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/agent/core/orchestrator.ts` | 1,360 | Main PentestAgent coordinator with failure tracking + dedup |
-| `src/agent/core/types.ts` | 452 | Global type definitions (agents, intelligence, tactical planning) |
+| `src/agent/core/orchestrator.ts` | 1,424 | Main PentestAgent coordinator with failure tracking + dedup |
+| `src/agent/core/types.ts` | 491 | Global type definitions (agents, intelligence, tactical planning) |
 | `src/agent/core/index.ts` | 3 | Barrel export |
 
-**Intelligence Layer** (647 lines):
+**Intelligence Layer** (900 lines):
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/agent/intelligence/reasoner.ts` | 488 | ReasonerAgent (Sonnet 4) - Strategic planning with tactical plans |
+| `src/agent/intelligence/reasoner.ts` | 499 | ReasonerAgent (Sonnet 4) - Strategic planning with tactical plans |
+| `src/agent/intelligence/evaluator.ts` | 241 | EvaluatorAgent (Haiku 3.5) - Outcome labeling (TP/FP/FN/TN) |
 | `src/agent/intelligence/profiler.ts` | 155 | ProfilerAgent (Haiku 3.5) - Target profiling and risk assessment |
-| `src/agent/intelligence/index.ts` | 4 | Barrel export |
+| `src/agent/intelligence/index.ts` | 5 | Barrel export |
 
-**Knowledge Layer** (753 lines):
+**Knowledge Layer** (869 lines):
 | File | Lines | Purpose |
 |------|-------|---------|
+| `src/agent/knowledge/rag-memory-agent.ts` | 484 | RAGMemoryAgent - Playbooks & anti-patterns retrieval |
 | `src/agent/knowledge/vuln-lookup.ts` | 381 | VulnLookupAgent - Exploit research via SearchSploit MCP |
-| `src/agent/knowledge/rag-memory-agent.ts` | 368 | RAGMemoryAgent - Playbooks & anti-patterns retrieval |
 | `src/agent/knowledge/index.ts` | 4 | Barrel export |
 
-**Execution Layer** (1,172 lines):
+**Execution Layer** (2,079 lines):
 | File | Lines | Purpose |
 |------|-------|---------|
+| `src/agent/execution/agentic-executor.ts` | 1,034 | AgenticExecutor - OODA loop, script gen, plan execution |
 | `src/agent/execution/data-cleaner.ts` | 474 | DataCleanerAgent (Haiku 4.5) - Skill-injected parsing & enrichment |
-| `src/agent/execution/executor.ts` | 311 | ExecutorAgent (Haiku 4.5) - Tool whitelist + plan passthrough |
-| `src/agent/execution/mcp-agent.ts` | 382 | MCPAgent - Tool execution via 3 MCP servers |
-| `src/agent/execution/index.ts` | 5 | Barrel export |
+| `src/agent/execution/executor.ts` | 323 | ExecutorAgent (Haiku 4.5) - Tool whitelist + plan passthrough |
+| `src/agent/execution/mcp-agent.ts` | 242 | DualMCPAgent - Tool execution via 2 MCP servers (Kali HTTP + RAG stdio) |
+| `src/agent/execution/index.ts` | 6 | Barrel export |
 
-**Utility Layer** (848 lines):
+**Utility Layer** (373 lines):
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/agent/utils/skills-loader.ts` | 519 | SkillsLoader + Memory Manager (tool preferences) |
-| `src/agent/utils/token-monitor.ts` | 196 | Token consumption tracking & cost monitoring |
-| `src/agent/utils/session-logger.ts` | 127 | JSONL session logger for Phase 6 ETL pipeline |
-| `src/agent/utils/index.ts` | 6 | Barrel export |
+| `src/agent/utils/skill-manager.ts` | 327 | SkillManager - Unified skill library + memory manager |
+| `src/agent/utils/instrumentation.ts` | 43 | Langfuse/OpenTelemetry tracing setup (conditional on env vars) |
+| `src/agent/utils/index.ts` | 3 | Barrel export |
 
-**Legacy (Phase 6 Migration Pending)** (245 lines):
+**Entry Points** (528 lines):
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/agent/definitions/evaluator.ts` | 241 | EvaluatorAgent (Haiku 3.5) - Outcome labeling (TP/FP/FN/TN) |
-| `src/agent/definitions/index.ts` | 4 | Barrel export |
-
-**Entry Points & Infrastructure** (442 lines):
-| File | Lines | Purpose |
-|------|-------|---------|
-| `src/index.ts` | 397 | Interactive CLI with REPL and Memory Manager commands |
-| `src/instrumentation.ts` | 43 | Langfuse/OpenTelemetry tracing setup (conditional on env vars) |
+| `src/index.ts` | 522 | Interactive CLI with REPL, exploit commands, and Memory Manager |
 | `src/agent/index.ts` | 6 | Main agent barrel export |
 
-#### Layer Documentation (236 lines)
+#### Layer Documentation (228 lines)
 | File | Lines | Purpose |
 |------|-------|---------|
 | `src/agent/execution/README.md` | 56 | Execution layer documentation (Executor, MCP, DataCleaner) |
-| `src/agent/utils/README.md` | 50 | Utility layer documentation (Skills, Logging, Monitoring) |
 | `src/agent/knowledge/README.md` | 47 | Knowledge layer documentation (VulnLookup, RAG Memory) |
-| `src/agent/intelligence/README.md` | 45 | Intelligence layer documentation (Reasoner, Profiler) |
+| `src/agent/intelligence/README.md` | 45 | Intelligence layer documentation (Reasoner, Profiler, Evaluator) |
+| `src/agent/utils/README.md` | 42 | Utility layer documentation (SkillManager, Instrumentation) |
 | `src/agent/core/README.md` | 38 | Core layer documentation (Orchestrator, Types) |
 
-#### Skills & Knowledge Base (968 lines)
+#### Skills & Knowledge Base (1,117 lines)
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/skills/nmap_skill.md` | 805 | Nmap expertise and best practices |
-| `src/skills/fingerprint_parsing_skill.md` | 156 | Technology fingerprinting rules (pfSense, WebLogic, etc.) |
+| `src/skills/nmap_skill.md` | 818 | Nmap expertise and best practices |
+| `src/skills/fingerprint_parsing_skill.md` | 218 | Technology fingerprinting rules (pfSense, WebLogic, etc.) |
+| `src/skills/github-search.md` | 61 | GitHub PoC search skill |
+| `src/skills/wpscan.md` | 13 | WPScan skill |
 | `src/config/agent_rules.json` | 7 | Memory Manager persistent rules |
 
-#### Project Documentation (1,254 lines)
+#### Project Documentation (1,539 lines)
 | File | Lines | Purpose |
 |------|-------|---------|
-| `README.md` | 1,061 | Project overview, architecture, and usage guide |
-| `CLAUDE.md` | 193 | Claude Code project instructions |
+| `README.md` | 1,341 | Project overview, architecture, and usage guide |
+| `CLAUDE.md` | 198 | Claude Code project instructions |
 
-#### Configuration (77 lines)
+#### Configuration (64 lines)
 | File | Lines | Purpose |
 |------|-------|---------|
-| `package.json` | 38 | NPM dependencies and scripts |
+| `package.json` | 37 | NPM dependencies and scripts |
 | `tsconfig.json` | 19 | TypeScript compiler configuration |
-| `src/config/allowed_tools.json` | 14 | Tool whitelist (single source of truth for 8 MCP tools) |
 | `.prettierrc` | 8 | Code formatting rules |
 
 ---
 
-**Total Project Size**: **~8,000 lines** of code and documentation
+**Total Project Size**: **~9,600 lines** of code and documentation
 
 **Architecture Breakdown**:
 - **5 Layers**: Core, Intelligence, Knowledge, Execution, Utils
-- **8 AI Agents**: Reasoner, Profiler, VulnLookup, RAG, Executor, MCP, DataCleaner, Evaluator
+- **8 AI Agents**: Reasoner, Profiler, Evaluator, VulnLookup, RAG, Executor, AgenticExecutor, DataCleaner
 - **3 Claude Models**: Sonnet 4 (strategic), Haiku 4.5 (tactical), Haiku 3.5 (profiling/evaluation)
-- **5 Major Systems**: Intelligence Layer, Evaluation Loop, RAG Memory, Skills System, Tool Whitelist
+- **5 Major Systems**: Intelligence Layer, Evaluation Loop, RAG Memory, Skills System, Dual MCP
 - **20+ TypeScript interfaces** for type-safe agent communication
-- **2 Skill Documents**: Nmap reconnaissance (805 lines), Fingerprint parsing (156 lines)
+- **4 Skill Documents**: Nmap (818), Fingerprint parsing (218), GitHub search (61), WPScan (13)
 - **5 Layer READMEs** documenting architecture and data flow
-- **2 Utility Components**: TokenMonitor (cost tracking), SessionLogger (JSONL logging)
 
 ---
 
