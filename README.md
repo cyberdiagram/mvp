@@ -2,9 +2,9 @@
 
 ![Visitors](https://api.visitorbadge.io/api/visitors?path=flashoop/mvp&label=VISITORS&countColor=%23263238)
 
-> **Last Updated:** 2026-02-13
-> **Architecture Version:** 3.0 (Dual MCP + Docker Architecture)
-> **Latest Feature:** Docker deployment (Brain + Kali containers), Dual MCP Agent (RAG stdio + Kali HTTP), AgenticExecutor OODA loop, 6 new CLI commands, dynamic tool discovery (2026-02-13)
+> **Last Updated:** 2026-02-14
+> **Architecture Version:** 3.1 (Legacy Cleanup & Restructure)
+> **Latest Feature:** Legacy code removal, evaluator moved to intelligence layer, instrumentation moved to utils (2026-02-14)
 
 An AI-powered penetration testing agent using Claude AI with a hierarchical multi-agent architecture, Intelligence Layer for target profiling, Evaluation Loop for continuous improvement, and RAG Memory System that queries security playbooks (successful techniques) and anti-patterns (failed exploits) from past experiences.
 
@@ -39,12 +39,12 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
 │   Target         │    │   Playbooks +    │      │   Exploit Exec   │
 │   Analysis       │    │   Anti-Patterns  │      │                  │
 │                  │    │                  │      │ • DualMCPAgent   │
-└──────────────────┘    └──────────────────┘      │   RAG (stdio) +  │
-                                                   │   Kali (HTTP)    │
-                                                   │                  │
-                                                   │ • Data Cleaner   │
-                                                   │   (Haiku 4.5)    │
-                                                   └──────────────────┘
+│ • Evaluator      │    │                  │      │   RAG (stdio) +  │
+│   (Haiku 3.5)    │    │                  │      │   Kali (HTTP)    │
+│   TP/FP/FN/TN    │    │                  │      │                  │
+│   Labeling       │    │                  │      │ • Data Cleaner   │
+│                  │    │                  │      │   (Haiku 4.5)    │
+└──────────────────┘    └──────────────────┘      └──────────────────┘
         │                           │                           │
         └───────────────────────────┼───────────────────────────┘
                                     │
@@ -53,9 +53,7 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
                     │   UTILITIES & MONITORING     │
                     ├──────────────────────────────┤
                     │ • Skill Manager (unified)    │
-                    │ • Token Monitor (Cost Track) │
-                    │ • Session Logger (JSONL ETL) │
-                    │ • Evaluator (TP/FP/FN/TN)    │
+                    │ • Instrumentation (Langfuse) │
                     └──────────────────────────────┘
                                     │
                                     ▼
@@ -78,7 +76,7 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
 - ✅ **AgenticExecutor**: OODA loop engine for autonomous exploit execution (generate, execute, plan-based, agentic)
 - ✅ **6 New CLI Commands**: `generate`, `execute`, `interactive`, `autorun`, `plan`, `autonomous`
 - ✅ **Dynamic Tool Discovery**: Tools discovered at runtime via `kaliClient.listTools()` — no static whitelist
-- ✅ **Unified SkillManager**: Merged skills-loader + pentest-executor skill system with tool-callable methods
+- ✅ **Unified SkillManager**: Merged skill loading + pentest-executor skill system with tool-callable methods
 - ✅ **Layered Architecture**: 5 layers (core, intelligence, knowledge, execution, utils)
 - ✅ **Langfuse Observability**: OpenTelemetry-based tracing for all phases
 - ✅ **Incremental Intelligence**: Only analyzes NEW services, merges results intelligently
@@ -91,9 +89,10 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
 
 | Layer | Agent | Model | Purpose |
 |-------|-------|-------|---------|
-| **Core** | Orchestrator | - | Main coordinator (8 phases + 2 utilities) |
+| **Core** | Orchestrator | - | Main coordinator (8 phases) |
 | **Intelligence** | Reasoner | Sonnet 4 | **STRATEGIC** planning - decides WHAT to do and WHY |
 | **Intelligence** | Profiler | Haiku 3.5 | Target profiling (OS, tech stack, security posture) |
+| **Intelligence** | Evaluator | Haiku 3.5 | Post-execution evaluation (TP/FP/FN/TN ground truth labeling) |
 | **Knowledge** | VulnLookup | - | Exploit research via SearchSploit (Kali container) |
 | **Knowledge** | RAG Memory | - | Retrieves playbooks & anti-patterns from past penetration tests |
 | **Execution** | Executor | Haiku 4.5 | **TACTICAL** recon execution - breaks down strategic actions into tool calls |
@@ -101,9 +100,7 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
 | **Execution** | DualMCPAgent | - | Routes tools to RAG (stdio) or Kali (HTTP) MCP servers |
 | **Execution** | Data Cleaner | Haiku 4.5 | Parses & enriches output (skill-injected fingerprinting + confidence) |
 | **Utilities** | Skill Manager | - | Unified skill loading + memory + tool-callable skill methods |
-| **Utilities** | Token Monitor | - | Tracks token consumption and costs per agent/model |
-| **Utilities** | Session Logger | - | JSONL logging for RAG Memory ETL pipeline (training data) |
-| **Utilities** | Evaluator | Haiku 3.5 | Post-execution evaluation (TP/FP/FN/TN ground truth labeling) |
+| **Utilities** | Instrumentation | - | Langfuse/OpenTelemetry tracing setup |
 
 ### Intelligence Layer Features (Phase 1-7 ✅)
 
@@ -202,9 +199,7 @@ docker/
 
 src/
 ├── index.ts                        # Interactive CLI (recon + 6 exploit commands)
-├── instrumentation.ts              # Langfuse/OpenTelemetry tracing setup
 ├── config/
-│   ├── agent-config.ts            # Environment configuration
 │   └── agent_rules.json            # Memory Manager rules (persistent)
 ├── skills/
 │   ├── nmap_skill.md               # Nmap reconnaissance skill
@@ -222,6 +217,7 @@ src/
     ├── intelligence/               # DECISION & ANALYSIS (Brains)
     │   ├── reasoner.ts            # ReasonerAgent (Sonnet 4) - Strategic planning
     │   ├── profiler.ts            # ProfilerAgent (Haiku 3.5) - Target profiling
+    │   ├── evaluator.ts           # EvaluatorAgent (Haiku 3.5) - Outcome labeling
     │   └── index.ts               # Barrel export
     │
     ├── knowledge/                  # RETRIEVAL & MEMORY (Memory)
@@ -236,16 +232,10 @@ src/
     │   ├── data-cleaner.ts        # DataCleanerAgent (Haiku 4.5) - Output parsing
     │   └── index.ts               # Barrel export
     │
-    ├── utils/                      # SUPPORT & INFRASTRUCTURE
-    │   ├── skill-manager.ts       # Unified SkillManager (skills + memory + tools)
-    │   ├── skills-loader.ts       # Legacy SkillsLoader (backward compat)
-    │   ├── token-monitor.ts       # Token consumption tracking
-    │   ├── session-logger.ts      # JSONL session logger
-    │   └── index.ts               # Barrel export
-    │
-    └── definitions/                # LEGACY (Phase 6 migration pending)
-        ├── evaluator.ts           # EvaluatorAgent (Haiku 3.5)
-        └── index.ts               # Exports
+    └── utils/                      # SUPPORT & INFRASTRUCTURE
+        ├── skill-manager.ts       # Unified SkillManager (skills + memory + tools)
+        ├── instrumentation.ts     # Langfuse/OpenTelemetry tracing setup
+        └── index.ts               # Barrel export
 
 logs/
 ├── sessions/                       # JSONL session logs for RAG ETL
@@ -255,10 +245,10 @@ logs/
 **Layer Responsibilities:**
 
 - **Core**: Orchestration and shared type system
-- **Intelligence**: Strategic decision-making and target analysis
+- **Intelligence**: Strategic decision-making, target analysis, and evaluation
 - **Knowledge**: Vulnerability research and memory retrieval
 - **Execution**: Tactical breakdown and tool execution
-- **Utils**: Infrastructure (skills, logging, monitoring)
+- **Utils**: Infrastructure (skills, instrumentation)
 
 ## Setup
 
@@ -856,282 +846,7 @@ cd /home/leo/mvp/docker && docker compose up --build
 
 ## Changelog
 
-### 2026-02-13 - Dual MCP + Docker Architecture (v3.0)
-
-**Docker Deployment:**
-- **Brain Container**: Node 20 image running compiled TypeScript agent
-- **Kali Container**: Kali rolling image with FastMCP Python server (6 tools), exploitdb, nmap, and pentest tools
-- **Docker Compose**: Bridge network (`pentest-net`) for brain↔kali communication, named volumes for apt cache and scripts
-
-**Dual MCP Architecture:**
-- **DualMCPAgent**: Replaced 3 stdio MCP clients (Nmap, SearchSploit, RAG) with 2 clients:
-  - RAG Memory: stdio transport via `@cyber/mcp-rag-memory-client` (yalc, on host)
-  - Kali: HTTP transport via `@modelcontextprotocol/sdk` `StreamableHTTPClientTransport` (Docker container)
-- **Dynamic Tool Discovery**: Tools discovered at runtime via `kaliClient.listTools()` — replaces static `allowed_tools.json` whitelist
-- **Tool Routing**: `rag_*` tools → RAG client, all other tools → Kali client
-
-**AgenticExecutor (OODA Loop):**
-- Ported from `pentest-executor` project with full Langfuse tracing
-- Autonomous tool discovery, package installation, script generation, and execution
-- Methods: `generateScript()`, `autoExecute()`, `executeFinal()`, `runAgentLoop()`, `runAgentWithTacticalPlan()`
-- Dynamic `TOOL_DEFINITIONS` built from `mcpAgent.getKaliToolNames()` + host-local skill tools
-
-**6 New CLI Commands:**
-- `generate <task>` — Generate PoC script with Claude
-- `execute <filename>` — Run script in Kali container
-- `interactive <task>` — Generate, review/edit, execute
-- `autorun <task>` — Generate + write + execute automatically
-- `plan <json-file>` — Load Tactical Plan with 4 strategy options (tool-based, GitHub PoC, manual, interactive)
-- `autonomous <task>` — Full agentic OODA loop
-
-**Unified SkillManager:**
-- Merged MVP's `skills-loader.ts` + pentest-executor's `skills.ts`
-- Tool-callable methods: `listSkills()`, `readSkillFile()`, `saveNewSkill()`, `buildSkillsPromptSection()`
-- Reasoner context: `buildSkillContext()` with keyword matching
-- Memory: `addRule()`, `removeRule()`, `listRules()`, `buildRulesPromptSection()`
-
-**Dependency Changes:**
-- Added: `@modelcontextprotocol/sdk` (^1.26.0) for HTTP MCP transport
-- Removed: `@cyber/mcp-nmap-client`, `@cyber/mcp-searchsploit-client` (replaced by Kali container)
-- Kept: `@cyber/mcp-rag-memory-client` (stdio transport for RAG)
-
----
-
-### 2026-02-08 - Observability & Safety Hardening (v2.2)
-
-**Langfuse Observability Tracing:**
-- **✅ OpenTelemetry Integration**: `src/instrumentation.ts` initializes `NodeSDK` with `LangfuseSpanProcessor`, conditional on `LANGFUSE_SECRET_KEY` and `LANGFUSE_PUBLIC_KEY` environment variables
-- **✅ Reconnaissance Tracing**: `reconnaissance()` wrapped in `startActiveObservation` with nested spans per iteration and phase (Phase 0–4)
-- **✅ Graceful Shutdown**: `shutdownTracing()` flushes all pending spans to Langfuse before process exit
-- **✅ Session Metadata**: Traces include `sessionId`, target IP, and phase-specific input/output metadata
-
-**Duplicate Operation Detection:**
-- **✅ Command Signature Tracking**: `executionHistory: Map<string, number>` tracks tool+args combinations across iterations
-- **✅ Loop Intervention**: When repeated commands detected, injects `[SYSTEM INTERVENTION - LOOP DETECTED]` warning with 4-step behavioral instructions into Reasoner context
-- **✅ Generic Behavioral Pattern**: Warnings are tool-agnostic, focusing on strategic redirection rather than hard-coded rules
-
-**Database Exhaustion Detection:**
-- **✅ Negative Keyword Analysis**: Detects when all tool results contain failure indicators (`no results`, `not found`, `0 matches`, etc.)
-- **✅ Advisory Injection**: `[SYSTEM ADVICE - DATABASE EXHAUSTION]` warning redirects Reasoner to broader search strategies or mission completion
-
-**Dynamic Tool Whitelist:**
-- **✅ JSON Configuration**: `src/config/allowed_tools.json` as single source of truth for 8 allowed MCP tools
-- **✅ Dynamic Loading**: `loadAllowedTools()` with multi-path resolution (works from both `src/` and `dist/`)
-- **✅ System Prompt Generation**: `TOOL_DESCRIPTIONS` map + `buildToolListing()` dynamically generates Executor's tool section
-- **✅ Tactical Plan Validation**: Both LLM-generated and Reasoner tactical plan steps validated against whitelist
-
-**RAG Memory Agent Refactoring:**
-- **✅ `recallInternalWarnings()`**: Phase 0 method querying `anti_patterns` collection, returns formatted `[WARNING N]` text
-- **✅ `searchHandbook()`**: Phase 4b method querying `playbooks` collection with `session_playbook` vs industry categorization
-- **✅ Metadata Preservation**: `parseRAGOutput()` preserves server metadata (type, service, category, tags, source, cve)
-- **✅ Parameter Fix**: `top_k` → `n_results` for `rag_query_playbooks` (was silently returning default 3 results)
-
-**OS Detection (nmap_os_detection):**
-- **✅ Server**: Added `OSDetectionSchema`, tool definition, and handler (`nmap -Pn -O --osscan-guess`) to `nmap-server-ts`
-- **✅ Client SDK**: Added `osDetection(target, ports?)` method to `nmap-client-ts`
-- **✅ Agent**: Added `case 'nmap_os_detection'` routing in `mcp-agent.ts`
-
-**MCP Agent Cleanup:**
-- **✅ `rag_recall`**: `recall()` → `recallMyExperience()` (SDK primary method name)
-- **✅ `rag_query_playbooks`**: Removed `(this.ragMemoryClient as any).callTool(...)` hack → `searchSecurityHandbook(query, nResults)`
-
----
-
-### 2026-02-08 - Agent Loop Hardening & Fingerprint Parsing Skills (v2.1)
-
-**Executor-Reasoner Feedback Fixes:**
-- **✅ Tactical Plan Passthrough**: Executor checks `reasonerOutput.tactical_plan` first; if the Reasoner provided structured attack vectors, they are used directly — bypassing the LLM call entirely. Eliminates hallucinated tool names.
-- **✅ Tool Whitelist Enforcement**: New `ALLOWED_TOOLS` Set (9 tools across Nmap/SearchSploit/RAG) with strict system prompt constraint + post-LLM validation in `parsePlan()`. Hallucinated tools like `vulnerability_research` are filtered with warning logs.
-- **✅ Explicit Failure Feedback**: `_runToolExecutionLoop` now returns `{ results, failures }`. `_prepareNextObservation` includes failure reports (e.g., "WARNING — 3 tool(s) FAILED") so the Reasoner never misinterprets failed iterations as success.
-- **✅ Service Deduplication**: Services are deduplicated by `host:port` during extraction, keeping the entry with more detail (product/version). Prevents context bloat from redundant scans.
-
-**Fingerprint Parsing Skills (DataCleaner Enhancement):**
-- **✅ Skill Injection**: `DataCleanerAgent` now supports `setSkillContext()` (mirrors ReasonerAgent pattern). Skill context is appended to the LLM system prompt during fallback parsing.
-- **✅ `fingerprint_parsing_skill.md`**: New skill file with identification rules for 15+ technologies:
-  - Network appliances: pfSense, FortiGate, MikroTik
-  - Middleware: WebLogic, Tomcat, JBoss/WildFly
-  - CMS: WordPress, Joomla
-  - Databases: Redis, Elasticsearch, MongoDB
-  - ICS: Modbus, Siemens S7
-  - Remote management: iLO, iDRAC, IPMI, VMware ESXi
-- **✅ Orchestrator Wiring**: Skills loaded and injected into both Reasoner and DataCleaner during `initialize()`
-
-**Code Metrics:**
-- Orchestrator: 1,117 → 1,360 lines (failure tracking, deduplication, skill wiring)
-- Executor: 236 → 311 lines (whitelist, plan passthrough, validation)
-- DataCleaner: 453 → 474 lines (skill injection)
-- New: `fingerprint_parsing_skill.md` (156 lines)
-
----
-
-### 2026-02-07 - Intelligence Phase Robustness & Orchestrator Refactoring
-
-**Intelligence Layer Improvements:**
-- **✅ Incremental Intelligence Analysis**: Only analyzes NEW services (tracked via fingerprints)
-  - Merges results into existing intelligence context
-  - Deduplicates vulnerabilities by CVE ID
-  - Keeps Reasoner up-to-date throughout entire mission
-  - No missed services, no duplicate analysis
-- **✅ Retry Mechanism with Exponential Backoff**: Handles transient failures
-  - Max 2 retries with exponential backoff (1s, 2s delays)
-  - Recovers from network issues, API rate limits, temporary server errors
-  - ~67% reduction in permanent failures
-  - Non-blocking - continues with degraded data on complete failure
-
-**Orchestrator Refactoring:**
-- **Main loop reduced from ~250 lines to ~70 lines** (72% reduction)
-- **8 private helper methods** for clean phase separation with comprehensive JSDoc
-- **2 utility helper methods**: `createServiceFingerprint()`, `retryWithBackoff<T>()`
-- **~420 lines of documentation** added
-
-**Architecture Documentation:**
-- Updated CLAUDE.md with layered architecture details, MCP integration, code metrics
-- Added comprehensive testing section to README.md (line 677)
-- Memory system documented for future sessions
-
----
-
-### 2026-02-07 - Layered Architecture Refactoring (v2.0)
-
-**Major Structural Refactoring**: Migrated from flat `src/agent/definitions/` directory to a layered architecture following the "Brains-Knowledge-Hands" metaphor.
-
-**New Directory Structure:**
-- **`core/`** - Orchestration layer with PentestAgent coordinator and global types
-- **`intelligence/`** - Decision & analysis layer (ReasonerAgent, ProfilerAgent)
-- **`knowledge/`** - Retrieval & memory layer (VulnLookupAgent, RAGMemoryAgent)
-- **`execution/`** - Task execution layer (ExecutorAgent, MCPAgent, DataCleanerAgent)
-- **`utils/`** - Support infrastructure (SkillsLoader, TokenMonitor, SessionLogger)
-
-**New Utility Components:**
-- **TokenMonitor** (`utils/token-monitor.ts`): Tracks token consumption and costs per agent
-  - Session-level statistics with cost estimates
-  - Per-agent and per-model breakdowns
-  - Export reports for budget management
-- **SessionLogger** (`utils/session-logger.ts`): JSONL session logger for Phase 6 integration
-  - Structured logging of agent execution steps
-  - Newline-delimited JSON format for ETL pipeline
-  - Critical bridge to `pentest-data-refinery` project
-
-**Layer Documentation:**
-- Added README.md in each layer explaining purpose, components, and dependencies
-- Clear data flow diagrams showing intelligence → knowledge → execution pipeline
-- Design principles and architectural constraints documented
-
-**Benefits:**
-- ✅ Logical separation of concerns (decision-making, retrieval, execution)
-- ✅ Improved code navigation and onboarding
-- ✅ Clear dependency flow enforced by directory structure
-- ✅ Preparation for Phase 6 (evaluation pipeline separation)
-- ✅ Barrel exports for clean imports (`import { ReasonerAgent } from './intelligence'`)
-
-**Migration Details:**
-- All files moved using `git mv` to preserve history
-- Import paths updated across entire codebase
-- TypeScript compilation verified (no errors)
-- Evaluator kept in `definitions/` until Phase 6 extraction
-- Total refactoring time: ~5 hours
-
-**Architecture Version**: Bumped to 2.0 to reflect major structural change
-
----
-
-### 2026-02-06 - Evaluation Loop Implementation (Phase 5-7)
-
-**Phase 5: Reasoner Tactical Planning ✅**
-- **Enhanced ReasonerAgent**: Generates TacticalPlanObject with attack vectors
-  - Prediction metrics for each attack vector (confidence, rationale, success criteria)
-  - Intelligence context injection (target profile, services, vulnerabilities)
-  - RAG memory context injection for anti-pattern warnings
-  - Tactical plan parsing and validation
-- **System Prompt Enhancement**: Added tactical planning instructions with examples
-- **Context Management**: `setIntelligenceContext()` and `injectMemoryContext()` methods
-
-**Phase 6: Evaluator Agent ✅**
-- **EvaluatorAgent**: Post-execution evaluation and outcome labeling
-  - Compares predicted outcomes vs. actual tool outputs
-  - Ground truth labels: true_positive, false_positive, false_negative, true_negative
-  - Confidence scoring for evaluation quality
-  - Fallback evaluation using regex pattern matching
-  - Prompt caching enabled (~90% token cost reduction)
-- **Model**: Claude Haiku 3.5 for fast, cost-effective evaluation
-
-**Phase 7: Orchestrator Integration ✅**
-- **Intelligence Layer Execution**: Parallel Profiler + VulnLookup after service discovery
-- **RAG Memory Recall**: Query past experiences before each Reasoner decision
-- **Evaluation Loop**: Execute tactical plan attack vectors and collect evaluations
-- **Training Data Collection**: TrainingPair generation with full context
-- **Session Logging**: JSONL format for RAG ETL pipeline consumption
-- **Helper Methods**:
-  - `runEvaluationLoop()` - Execute and evaluate attack vectors
-  - `saveTrainingData()` - Persist training pairs to JSON files
-  - `logSessionStep()` - Write session steps in JSONL format
-  - `extractOpenPorts()`, `extractTargetInfo()`, `determineOutcomeLabel()` - Data extraction utilities
-
-**Configuration Options:**
-- `enableEvaluation`: Enable evaluation loop and training data collection
-- `enableRAGMemory`: Enable RAG memory recall before decisions
-- `trainingDataPath`: Directory for training data JSON files
-- `sessionLogsPath`: Directory for session JSONL logs
-
-**Performance:**
-- Parallel intelligence gathering reduces latency
-- Prompt caching on Profiler and Evaluator (90% cost savings)
-- Session-based training data batching for efficiency
-
-**Architecture:**
-- 7 specialized agents (Reasoner, Executor, MCP, DataCleaner, Profiler, VulnLookup, Evaluator)
-- Complete Intelligence → Planning → Execution → Evaluation pipeline
-- Training data generation for continuous model improvement
-
-### 2026-02-06 - Intelligence Layer & RAG Memory Integration (Phase 1-4)
-
-**Phase 1-3: Intelligence Layer Foundation ✅**
-- **Enhanced Data Cleaner**: Service categorization, confidence scoring, criticality assessment
-- **ProfilerAgent**: OS fingerprinting, tech stack inference, security posture assessment
-- **Type System**: Comprehensive interfaces for intelligence-driven operations
-  - `DiscoveredService`, `TargetProfile`, `IntelligenceContext`
-  - `TacticalPlanObject`, `EvaluationResult`, `TrainingPair` (ready for Phase 5-6)
-
-**Phase 4a: VulnLookup Agent ✅**
-- **VulnLookupAgent**: Exploit research via SearchSploit MCP Server
-  - Offline-capable (local ExploitDB database)
-  - No rate limits, instant exploit lookup
-  - CVE mapping with severity inference
-  - Platform-aware filtering (Linux/Windows)
-  - PoC code examination and local path retrieval
-
-**Phase 4b: RAG Memory Integration Points ✅**
-- **Session Logging**: JSONL format for ETL pipeline consumption
-- **SessionStep Interface**: Structured logging of agent decisions
-- **Integration Documentation**: [docs/RAG-Memory-Integration.md](docs/RAG-Memory-Integration.md)
-- **Directory Structure**: `logs/sessions/` for session logs
-
-**Performance Optimizations:**
-- Prompt caching enabled for ProfilerAgent (~90% token cost reduction)
-- Parallel intelligence gathering (Profiler + VulnLookup)
-
-**Architecture:**
-- 7 specialized agents (Reasoner, Executor, MCP, DataCleaner, Profiler, VulnLookup, Evaluator)
-- Intelligence Layer: Service enrichment → Target profiling → Vulnerability research
-- Evaluation Loop: Tactical planning → Execution → Evaluation → Training data
-- RAG Memory System integration for continuous learning
-
-### 2026-02-05 - Memory Manager & Interactive Mode
-- **Memory Manager**: CLAUDE.md-style preference injection (`remember`, `forget`, `rules` commands)
-- **Interactive REPL**: Welcome banner, direct IP/hostname input, help system
-- **Documentation**: JSDoc comments, exposed skillsLoader for Memory Manager
-
-### 2026-02-03 - Multi-Agent Architecture (Initial Release)
-- Hierarchical multi-agent system: Reasoner (Sonnet 4), Executor (Haiku 4.5), MCP Agent, Data Cleaner
-- Environment variable for API key (removed hardcoded key)
-
-**Agent Flow:**
-Target → Reasoner (STRATEGIC: "scan for vulnerabilities") → Executor (TACTICAL: "nmap_port_scan + nmap_service_detection") → MCP Agent → DataCleaner → Intelligence Layer (Profiler + VulnLookup) → Tactical Plan → Evaluation Loop → Training Data → back to Reasoner
-
-**Key Architectural Principle:**
-- **Reasoner**: Outputs HIGH-LEVEL strategic actions (no tool names or parameters)
-- **Executor**: Breaks down strategic actions into 1-N concrete tool calls with specific parameters
-- This separation ensures the Executor can properly decompose complex actions into multiple steps
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
 ---
 
