@@ -9,7 +9,7 @@
  */
 
 import 'dotenv/config';
-import { shutdownTracing } from './instrumentation.js';
+import { shutdownTracing } from './agent/utils/instrumentation.js';
 import path from 'path';
 import * as fs from 'fs';
 import * as readline from 'readline';
@@ -131,7 +131,7 @@ function handleRemember(agent: PentestAgent, args: string[]): void {
   }
   const tool = args[0];
   const rule = args.slice(1).join(' ');
-  agent.skillsLoader.addRule(tool, rule);
+  agent.skillManager.addRule(tool, rule);
   console.log(`\n  Rule saved for ${tool}: "${rule}"\n`);
 }
 
@@ -141,7 +141,7 @@ function handleForget(agent: PentestAgent, args: string[]): void {
     return;
   }
   const tool = args[0];
-  const count = agent.skillsLoader.clearRules(tool);
+  const count = agent.skillManager.clearRules(tool);
   if (count > 0) {
     console.log(`\n  Cleared ${count} rule(s) for ${tool}\n`);
   } else {
@@ -151,7 +151,7 @@ function handleForget(agent: PentestAgent, args: string[]): void {
 
 function handleRules(agent: PentestAgent, args: string[]): void {
   const toolFilter = args[0];
-  const rules = agent.skillsLoader.listRules(toolFilter);
+  const rules = agent.skillManager.listRules(toolFilter);
   const toolNames = Object.keys(rules);
 
   if (toolNames.length === 0) {

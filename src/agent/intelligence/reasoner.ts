@@ -198,7 +198,7 @@ export class ReasonerAgent {
    *
    * Skills provide domain expertise about specific tools (e.g., Nmap usage patterns).
    *
-   * @param context - Formatted skill content from SkillsLoader.buildSkillContext()
+   * @param context - Formatted skill content from SkillManager.buildSkillContext()
    */
   setSkillContext(context: string): void {
     this.skillContext = context;

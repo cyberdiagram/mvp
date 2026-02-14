@@ -2,7 +2,7 @@
  * SkillManager - Unified skill library and memory manager.
  *
  * Merges two systems:
- * 1. MVP's SkillsLoader: *_skill.md files with keyword matching + Memory Manager (agent_rules.json)
+ * 1. *_skill.md files with keyword matching + Memory Manager (agent_rules.json)
  * 2. pentest-executor's skills.ts: YAML frontmatter .md files with tool-callable operations
  *
  * Provides:

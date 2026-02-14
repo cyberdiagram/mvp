@@ -113,7 +113,7 @@ export class DataCleanerAgent {
    * (e.g., pfSense from lighttpd headers, WebLogic from t3 protocol)
    * that rule-based parsing cannot detect.
    *
-   * @param context - Formatted skill content from SkillsLoader.buildSkillContext()
+   * @param context - Formatted skill content from SkillManager.buildSkillContext()
    */
   public setSkillContext(context: string): void {
     this.skillContext = context;

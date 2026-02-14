@@ -1,11 +1,9 @@
 // Main Orchestrator - Coordinates all subagents
 
-import { SkillsLoader } from '../utils/skills-loader.js';
-import { ReasonerAgent, ProfilerAgent } from '../intelligence/index.js';
+import { ReasonerAgent, ProfilerAgent, EvaluatorAgent } from '../intelligence/index.js';
 import { VulnLookupAgent, RAGMemoryAgent } from '../knowledge/index.js';
 import { ExecutorAgent, DualMCPAgent, AgenticExecutor, DataCleanerAgent } from '../execution/index.js';
 import { SkillManager } from '../utils/skill-manager.js';
-import { EvaluatorAgent } from '../definitions/index.js';
 import {
   CleanedData,
   DiscoveredService,
@@ -54,18 +52,6 @@ export interface AgentConfig {
 export class PentestAgent {
   /** Configuration for the agent system */
   private config: AgentConfig;
-
-  /**
-   * Skills and rules loader - exposed publicly for Memory Manager access.
-   *
-   * The SkillsLoader provides:
-   * - Skill documents loading (*_skill.md)
-   * - Memory Manager (addRule, removeRule, listRules)
-   * - Context building for LLM injection
-   *
-   * @public
-   */
-  public skillsLoader: SkillsLoader;
 
   /** Strategic reasoning agent (Claude Sonnet 4) */
   private reasoner: ReasonerAgent;
@@ -133,7 +119,6 @@ export class PentestAgent {
    */
   constructor(config: AgentConfig) {
     this.config = config;
-    this.skillsLoader = new SkillsLoader(config.skillsDir);
     this.skillManager = new SkillManager(config.skillsDir);
     this.reasoner = new ReasonerAgent(config.anthropicApiKey);
     this.executor = new ExecutorAgent(config.anthropicApiKey);
@@ -166,10 +151,10 @@ export class PentestAgent {
     console.log('[Orchestrator] Initializing multi-agent system...');
 
     // Load skills and inject into agents
-    await this.skillsLoader.loadSkills();
-    const skillContext = this.skillsLoader.buildSkillContext('reconnaissance pentest');
+    await this.skillManager.loadSkills();
+    const skillContext = this.skillManager.buildSkillContext('reconnaissance pentest');
     this.reasoner.setSkillContext(skillContext);
-    const parsingSkills = this.skillsLoader.buildSkillContext('fingerprint parsing');
+    const parsingSkills = this.skillManager.buildSkillContext('fingerprint parsing');
     this.dataCleaner.setSkillContext(parsingSkills);
     console.log('[Orchestrator] ✓ Skills loaded (Reasoner + DataCleaner)');
 
@@ -194,9 +179,6 @@ export class PentestAgent {
       this.agenticExecutor = new AgenticExecutor(this.mcpAgent, this.skillManager);
       console.log('[Orchestrator] ✓ Agentic Executor initialized');
     }
-
-    // Load unified skill manager
-    await this.skillManager.loadSkills();
 
     console.log('[Orchestrator] Ready!');
     console.log(

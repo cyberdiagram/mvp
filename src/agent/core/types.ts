@@ -87,20 +87,6 @@ export interface CleanedData {
 }
 
 /**
- * Result for a single host from Nmap host discovery.
- *
- * Used when scanning a network to find which hosts are alive.
- */
-export interface NmapHostResult {
-  /** IP address of the host (e.g., "192.168.1.1") */
-  ip: string;
-  /** Whether the host responded to probes */
-  status: 'up' | 'down';
-  /** Hostname if resolved via DNS */
-  hostname?: string;
-}
-
-/**
  * Result for a single port from an Nmap port scan.
  *
  * Contains information about port state and any detected service.

@@ -8,7 +8,7 @@
  * The retrieved knowledge is injected into the Reasoner's context
  * alongside Profiler and VulnLookup intelligence.
  *
- * @module agent/definitions/rag-memory-agent
+ * @module agent/knowledge/rag-memory-agent
  */
 
 import { DualMCPAgent } from '../execution/mcp-agent.js';

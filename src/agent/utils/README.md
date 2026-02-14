@@ -4,25 +4,17 @@
 
 ## Components
 
-- **`skills-loader.ts`** - `SkillsLoader` class
+- **`skill-manager.ts`** - `SkillManager` class
   - **Skills Loading**: Loads domain knowledge from `src/skills/*.md` files
   - **Memory Manager**: Persists user tool preferences to `agent_rules.json`
   - Keyword-based skill matching for context injection
-  - CLAUDE.md-style "soft prompts over hard code" pattern
+  - Tool-callable functions for the agentic loop (listSkills, readSkillFile, saveNewSkill)
   - Methods: `loadSkills()`, `buildSkillContext()`, `addRule()`, `removeRule()`, `listRules()`
 
-## Future Components (Phase 6 Preparation)
-
-- **`token-monitor.ts`** - Token consumption tracking
-  - Track usage per agent (Sonnet 4 vs Haiku)
-  - Cost calculation and budget management
-  - Session-level statistics export
-
-- **`session-logger.ts`** - JSONL session logger
-  - Records agent steps with timestamps and metadata
-  - Writes newline-delimited JSON for batch processing
-  - Critical for Phase 6 (evaluation pipeline integration)
-  - Enables offline analysis in `pentest-data-refinery` project
+- **`instrumentation.ts`** - Langfuse/OpenTelemetry setup
+  - Initializes tracing with Langfuse span processor
+  - Must be imported before other application modules
+  - Provides `shutdownTracing()` for clean process exit
 
 ## Dependencies
 
@@ -40,7 +32,7 @@ User Command → MemoryManager → agent_rules.json
                                     ↓
                           Reasoner Context Injection
 
-src/skills/*.md → SkillsLoader → buildSkillContext() → Agent Prompts
+src/skills/*.md → SkillManager → buildSkillContext() → Agent Prompts
 ```
 
 ## Design Principles
