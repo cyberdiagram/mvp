@@ -4,6 +4,47 @@ All notable changes to this project are documented in this file.
 
 ---
 
+### 2026-02-15 - Engine Worker & Cyber-Bridge Integration (v3.2)
+
+**Engine Worker (`src/worker.ts`):**
+- **Redis Consumer Entry Point**: New `src/worker.ts` connects PentestAgent to the Cyber-Bridge web middleware via Redis
+- **BRPOP Loop**: Blocks on `cyberbridge:tasks` queue, picks up tasks, runs the real agent, and publishes results
+- **Phase-to-Method Mapping**: `recon`/`plan` → `reconnaissance()`, `exec` → `agenticExecutor.runAgentLoop()`, `report` → reserved (error)
+- **Real-Time Log Streaming**: Publishes structured logs to `logs:{tenant}:{taskId}` via Redis Pub/Sub
+- **Completion Signaling**: Atomic `HSET` state + result, then `PUBLISH` to `complete:{tenant}:{taskId}`
+- **Error Handling**: Failed tasks marked with `state=failed` + error published to complete channel
+- **Graceful Shutdown**: SIGINT/SIGTERM handlers call `agent.shutdown()` and `redis.quit()`
+
+**Structured Logging System:**
+- **`LogEntry` Type**: New `{ level: LogLevel, phase: string, message: string }` interface in `types.ts`
+- **`LogLevel` Type**: `'INFO' | 'STEP' | 'RESULT' | 'VULN' | 'WARN' | 'ERROR'`
+- **`AgentConfig.onLog`**: Upgraded from `(message: string) => void` to `(entry: LogEntry) => void`
+- **Orchestrator**: All `console.log` calls in reconnaissance pipeline replaced with `this.log(level, phase, message)` using tag mapping (e.g., `[MCP Agent] ✓` → `RESULT`/`MCP Agent`, `[VulnLookup] ✓ Found` → `VULN`/`VulnLookup`)
+- **AgenticExecutor**: Added `setOnLog()` method + private `log()` helper; all `console.log` calls replaced with structured logging
+- **Propagation**: Orchestrator wires `onLog` to AgenticExecutor via `setOnLog()` during `initialize()`
+
+**`ReconResult` Return Type:**
+- **New Interface**: `ReconResult { sessionId, iterations, results, discoveredServices, tacticalPlans, intelligence }`
+- **`reconnaissance()`**: Return type changed from `Promise<void>` to `Promise<ReconResult>`
+- **Backward-Compatible**: CLI entry point (`src/index.ts`) ignores the return value — no changes needed
+
+**Standalone Compatibility:**
+- `onLog` is optional — when not set, `?.` chain is a no-op (CLI mode identical to before)
+- `ioredis` is only imported in `worker.ts` — core agent has zero Redis dependency
+- `npm run dev` / `npm start` continue to launch the interactive CLI
+
+**Package Updates:**
+- Added scripts: `worker` (`tsc && node dist/worker.js`), `worker:dev` (`tsx src/worker.ts`)
+- Added devDependency: `tsx` (^4.19.2)
+- `ioredis` was already in dependencies
+
+**Documentation:**
+- README updated with engine worker architecture diagram, phase mapping table, structured logging explanation
+- Added full "Testing Engine Worker" section with 7-step end-to-end verification
+- Updated project structure, prerequisites (Redis), environment variables, and implementation status
+
+---
+
 ### 2026-02-14 - Legacy Cleanup & Restructure (v3.1)
 
 **Dead Code Removal:**
