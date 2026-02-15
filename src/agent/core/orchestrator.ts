@@ -15,6 +15,9 @@ import {
   ExecutorPlan,
   VulnerabilityInfo,
   TargetProfile,
+  LogLevel,
+  LogEntry,
+  ReconResult,
 } from './types.js';
 import { startActiveObservation, propagateAttributes } from '@langfuse/tracing';
 
@@ -29,6 +32,8 @@ export interface AgentConfig {
   enableRAGMemory?: boolean;
   trainingDataPath?: string;
   sessionLogsPath?: string;
+  /** Optional callback invoked for every structured log entry. Used by worker mode to relay logs to Redis Pub/Sub. */
+  onLog?: (entry: LogEntry) => void;
 }
 
 /**
@@ -138,6 +143,17 @@ export class PentestAgent {
   }
 
   /**
+   * Logs a structured message to console and optionally to the onLog callback.
+   * @param level - Severity tag (INFO, STEP, RESULT, VULN, WARN, ERROR).
+   * @param phase - The orchestrator phase producing the log (e.g. "Reasoner", "MCP Agent").
+   * @param message - The log message body.
+   */
+  private log(level: LogLevel, phase: string, message: string): void {
+    console.log(`[${phase}] ${message}`);
+    this.config.onLog?.({ level, phase, message });
+  }
+
+  /**
    * Initializes the multi-agent system.
    *
    * This method:
@@ -148,7 +164,7 @@ export class PentestAgent {
    * Must be called before reconnaissance() or interactive().
    */
   async initialize(): Promise<void> {
-    console.log('[Orchestrator] Initializing multi-agent system...');
+    this.log('INFO', 'Orchestrator', 'Initializing multi-agent system...');
 
     // Load skills and inject into agents
     await this.skillManager.loadSkills();
@@ -156,7 +172,7 @@ export class PentestAgent {
     this.reasoner.setSkillContext(skillContext);
     const parsingSkills = this.skillManager.buildSkillContext('fingerprint parsing');
     this.dataCleaner.setSkillContext(parsingSkills);
-    console.log('[Orchestrator] ✓ Skills loaded (Reasoner + DataCleaner)');
+    this.log('INFO', 'Orchestrator', '✓ Skills loaded (Reasoner + DataCleaner)');
 
     // Initialize Dual MCP Agent (RAG stdio + Kali HTTP)
     await this.mcpAgent.initialize({
@@ -167,7 +183,7 @@ export class PentestAgent {
         ? { url: this.config.kaliMcpUrl }
         : undefined,
     });
-    console.log('[Orchestrator] ✓ Dual MCP Agent initialized');
+    this.log('INFO', 'Orchestrator', '✓ Dual MCP Agent initialized');
 
     // Build dynamic tool list from Kali discovery + RAG tools
     const kaliTools = this.mcpAgent.getKaliToolNames();
@@ -177,26 +193,33 @@ export class PentestAgent {
     // Initialize AgenticExecutor (autonomous OODA loop)
     if (this.mcpAgent.isKaliConnected()) {
       this.agenticExecutor = new AgenticExecutor(this.mcpAgent, this.skillManager);
-      console.log('[Orchestrator] ✓ Agentic Executor initialized');
+      if (this.config.onLog) {
+        this.agenticExecutor.setOnLog(this.config.onLog);
+      }
+      this.log('INFO', 'Orchestrator', '✓ Agentic Executor initialized');
     }
 
-    console.log('[Orchestrator] Ready!');
-    console.log(
-      '[Orchestrator] Core Agents: Reasoner (Sonnet 4), Executor (Haiku 4.5), MCP Agent, Data Cleaner (Haiku 4.5)'
+    this.log('INFO', 'Orchestrator', 'Ready!');
+    this.log(
+      'INFO',
+      'Orchestrator',
+      'Core Agents: Reasoner (Sonnet 4), Executor (Haiku 4.5), MCP Agent, Data Cleaner (Haiku 4.5)'
     );
-    console.log(
-      '[Orchestrator] Intelligence Layer: Profiler (Haiku 3.5), VulnLookup (SearchSploit MCP)'
+    this.log(
+      'INFO',
+      'Orchestrator',
+      'Intelligence Layer: Profiler (Haiku 3.5), VulnLookup (SearchSploit MCP)'
     );
     if (this.ragMemory) {
-      console.log('[Orchestrator] RAG Memory: Enabled (Playbooks + Anti-Patterns)');
+      this.log('INFO', 'Orchestrator', 'RAG Memory: Enabled (Playbooks + Anti-Patterns)');
     }
     if (this.config.enableEvaluation) {
-      console.log('[Orchestrator] Evaluation: Enabled (Evaluator Haiku 3.5)');
+      this.log('INFO', 'Orchestrator', 'Evaluation: Enabled (Evaluator Haiku 3.5)');
     }
     if (this.config.enableRAGMemory) {
-      console.log('[Orchestrator] RAG Memory: Enabled');
+      this.log('INFO', 'Orchestrator', 'RAG Memory: Enabled');
     }
-    console.log(`[Orchestrator] Session ID: ${this.sessionId}`);
+    this.log('INFO', 'Orchestrator', `Session ID: ${this.sessionId}`);
   }
 
   // ============================================================================
@@ -246,8 +269,10 @@ export class PentestAgent {
 
         if (attempt < maxRetries) {
           const delayMs = initialDelayMs * Math.pow(2, attempt); // Exponential backoff
-          console.log(
-            `  ⚠ Attempt ${attempt + 1}/${maxRetries + 1} failed, retrying in ${delayMs}ms...`
+          this.log(
+            'WARN',
+            'Orchestrator',
+            `⚠ Attempt ${attempt + 1}/${maxRetries + 1} failed, retrying in ${delayMs}ms...`
           );
           await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
@@ -255,7 +280,7 @@ export class PentestAgent {
     }
 
     // All retries exhausted
-    console.log(`  ✗ All ${maxRetries + 1} attempts failed:`, lastError?.message);
+    this.log('ERROR', 'Orchestrator', `✗ All ${maxRetries + 1} attempts failed: ${lastError?.message}`);
     return null;
   }
 
@@ -280,7 +305,7 @@ export class PentestAgent {
   private async _runRAGMemoryRecall(observation: string): Promise<void> {
     if (!this.ragMemory) return;
 
-    console.log('\n[RAG Memory] Phase 0: Checking for past failure warnings...');
+    this.log('INFO', 'RAG Memory', 'Phase 0: Checking for past failure warnings...');
 
     try {
       const { antiPatterns, formattedText } =
@@ -288,14 +313,14 @@ export class PentestAgent {
 
       if (antiPatterns.length > 0 && formattedText) {
         if (this.debugDisableAntiPatternInjection) {
-          console.log('[RAG Memory] ⚠ DEBUG: Anti-pattern injection SKIPPED');
+          this.log('WARN', 'RAG Memory', '⚠ DEBUG: Anti-pattern injection SKIPPED');
         } else {
-          console.log(`[RAG Memory] ✓ Injected ${antiPatterns.length} failure lesson(s)`);
+          this.log('INFO', 'RAG Memory', `✓ Injected ${antiPatterns.length} failure lesson(s)`);
           this.reasoner.injectMemoryContext(formattedText);
         }
       }
     } catch (err) {
-      console.log('[RAG Memory] ⚠ Failed (continuing without memory):', err);
+      this.log('WARN', 'RAG Memory', `⚠ Failed (continuing without memory): ${err}`);
     }
   }
 
@@ -315,11 +340,11 @@ export class PentestAgent {
    * @private
    */
   private async _runReasoningPhase(observation: string): Promise<ReasonerOutput> {
-    console.log('\n[Reasoner] Analyzing situation...');
+    this.log('STEP', 'Reasoner', 'Analyzing situation...');
     const reasoning = await this.reasoner.reason(observation);
 
-    console.log(`[Reasoner] Thought: ${reasoning.thought}`);
-    console.log(`[Reasoner] Action: ${reasoning.action}`);
+    this.log('STEP', 'Reasoner', `Thought: ${reasoning.thought}`);
+    this.log('STEP', 'Reasoner', `Action: ${reasoning.action}`);
 
     return reasoning;
   }
@@ -345,7 +370,7 @@ export class PentestAgent {
     target: string,
     openPorts: number[]
   ): Promise<ExecutorPlan | null> {
-    console.log('\n[Executor] Planning execution...');
+    this.log('STEP', 'Executor', 'Planning execution...');
 
     const plan = await this.executor.planExecution(reasoning, {
       target,
@@ -353,13 +378,13 @@ export class PentestAgent {
     });
 
     if (plan.steps.length === 0) {
-      console.log('[Executor] No executable steps. Continuing analysis...');
+      this.log('STEP', 'Executor', 'No executable steps. Continuing analysis...');
       return null;
     }
 
-    console.log(`[Executor] Plan: ${plan.steps.length} step(s)`);
+    this.log('STEP', 'Executor', `Plan: ${plan.steps.length} step(s)`);
     plan.steps.forEach((step, i) => {
-      console.log(`  ${i + 1}. ${step.tool}: ${step.description}`);
+      this.log('STEP', 'Executor', `  ${i + 1}. ${step.tool}: ${step.description}`);
     });
 
     return plan;
@@ -403,25 +428,27 @@ export class PentestAgent {
       const commandSignature = `${step.tool}:${JSON.stringify(step.arguments)}`;
       const priorCount = this.executionHistory.get(commandSignature) || 0;
       if (priorCount > 0) {
-        console.log(
-          `[Orchestrator] ⚠ Repeated command detected (run #${priorCount + 1}): ${step.tool} ${JSON.stringify(step.arguments)}`
+        this.log(
+          'WARN',
+          'Orchestrator',
+          `⚠ Repeated command detected (run #${priorCount + 1}): ${step.tool} ${JSON.stringify(step.arguments)}`
         );
         repeatedCommands.push(commandSignature);
       }
       this.executionHistory.set(commandSignature, priorCount + 1);
 
       // MCP Agent executes tool
-      console.log(`\n[MCP Agent] Executing: ${step.tool}`);
+      this.log('STEP', 'MCP Agent', `Executing: ${step.tool}`);
       const rawResult = await this.mcpAgent.executeTool(step);
 
       if (rawResult.success) {
-        console.log('[MCP Agent] ✓ Execution successful');
+        this.log('RESULT', 'MCP Agent', '✓ Execution successful');
 
         // Data Cleaner processes raw output
-        console.log('[Data Cleaner] Parsing output...');
+        this.log('STEP', 'Data Cleaner', 'Parsing output...');
         const cleanedData = await this.dataCleaner.clean(rawResult.output, step.tool);
-        console.log(`[Data Cleaner] ✓ Type: ${cleanedData.type}`);
-        console.log(`[Data Cleaner] Summary: ${cleanedData.summary}`);
+        this.log('RESULT', 'Data Cleaner', `✓ Type: ${cleanedData.type}`);
+        this.log('RESULT', 'Data Cleaner', `Summary: ${cleanedData.summary}`);
 
         // Extract discovered services if present, deduplicating by host:port.
         // When a duplicate is found, keep the entry with more detail (product/version).
@@ -442,17 +469,21 @@ export class PentestAgent {
                 const existing = allDiscoveredServices[existingIdx];
                 if (!existing.product && s.product) {
                   allDiscoveredServices[existingIdx] = s;
-                  console.log(`[Data Cleaner] ↻ Updated ${key} with enriched data`);
+                  this.log('RESULT', 'Data Cleaner', `↻ Updated ${key} with enriched data`);
                 }
               }
             }
-            console.log(
-              `[Data Cleaner] ✓ Extracted ${services.length} services (${added} new, ${services.length - added} deduplicated)`
+            this.log(
+              'RESULT',
+              'Data Cleaner',
+              `✓ Extracted ${services.length} services (${added} new, ${services.length - added} deduplicated)`
             );
             services.forEach((s, i) => {
               const product = s.product ? `${s.product} ${s.version || ''}`.trim() : 'unknown';
-              console.log(
-                `[Data Cleaner]   ${i + 1}. ${s.host}:${s.port} ${s.service} | product=${product} | category=${s.category} | criticality=${s.criticality} | confidence=${s.confidence}`
+              this.log(
+                'RESULT',
+                'Data Cleaner',
+                `  ${i + 1}. ${s.host}:${s.port} ${s.service} | product=${product} | category=${s.category} | criticality=${s.criticality} | confidence=${s.confidence}`
               );
             });
           }
@@ -460,7 +491,7 @@ export class PentestAgent {
 
         results.push(cleanedData);
       } else {
-        console.log(`[MCP Agent] ✗ Execution failed: ${rawResult.error}`);
+        this.log('ERROR', 'MCP Agent', `✗ Execution failed: ${rawResult.error}`);
         failures.push({ tool: step.tool, error: rawResult.error || 'Unknown error' });
       }
 
@@ -515,8 +546,10 @@ export class PentestAgent {
       return currentIntelligence;
     }
 
-    console.log(
-      `\n[Intelligence Layer] Analyzing ${newServices.length} new service(s)... (${allDiscoveredServices.length} total)`
+    this.log(
+      'STEP',
+      'Intelligence',
+      `Analyzing ${newServices.length} new service(s)... (${allDiscoveredServices.length} total)`
     );
 
     // Run Profiler and VulnLookup in parallel with retry mechanism
@@ -526,7 +559,7 @@ export class PentestAgent {
         2, // Max 2 retries
         1000 // 1s initial delay
       ).catch((err) => {
-        console.log('[Profiler] ⚠ Failed after retries (continuing without profile):', err.message);
+        this.log('WARN', 'Profiler', `⚠ Failed after retries (continuing without profile): ${err.message}`);
         return null;
       }),
       this.retryWithBackoff(
@@ -534,10 +567,7 @@ export class PentestAgent {
         2, // Max 2 retries
         1000 // 1s initial delay
       ).catch((err) => {
-        console.log(
-          '[VulnLookup] ⚠ Failed after retries (continuing without CVE data):',
-          err.message
-        );
+        this.log('WARN', 'VulnLookup', `⚠ Failed after retries (continuing without CVE data): ${err.message}`);
         return [];
       }),
     ]);
@@ -550,17 +580,19 @@ export class PentestAgent {
 
     // Log profiler results
     if (newTargetProfile) {
-      console.log(
-        `[Profiler] ✓ Profile: ${newTargetProfile.os_family || 'Unknown'} - ${newTargetProfile.security_posture}`
+      this.log(
+        'RESULT',
+        'Profiler',
+        `✓ Profile: ${newTargetProfile.os_family || 'Unknown'} - ${newTargetProfile.security_posture}`
       );
     }
 
     // Log vulnerability results
     const validNewVulns = newVulnerabilities || [];
     if (validNewVulns.length > 0) {
-      console.log(`[VulnLookup] ✓ Found ${validNewVulns.length} vulnerabilities`);
+      this.log('VULN', 'VulnLookup', `✓ Found ${validNewVulns.length} vulnerabilities`);
       validNewVulns.slice(0, 3).forEach((v) => {
-        console.log(`  - ${v.cve_id} (${v.severity})`);
+        this.log('VULN', 'VulnLookup', `  - ${v.cve_id} (${v.severity})`);
       });
     }
 
@@ -583,8 +615,10 @@ export class PentestAgent {
       });
       mergedVulnerabilities = Array.from(vulnMap.values());
 
-      console.log(
-        `[Intelligence Layer] ✓ Merged intelligence: ${mergedVulnerabilities.length} total vulnerabilities`
+      this.log(
+        'RESULT',
+        'Intelligence',
+        `✓ Merged intelligence: ${mergedVulnerabilities.length} total vulnerabilities`
       );
     } else {
       // First run - no merging needed
@@ -604,7 +638,7 @@ export class PentestAgent {
 
     // Inject updated intelligence into Reasoner
     this.reasoner.setIntelligenceContext(intelligence);
-    console.log('[Intelligence Layer] ✓ Intelligence context updated in Reasoner');
+    this.log('RESULT', 'Intelligence', '✓ Intelligence context updated in Reasoner');
 
     // RAG Memory Recall (Playbooks + Anti-Patterns) - always run for new services
     await this._runRAGMemoryForIntelligence(newServices, validNewVulns, newTargetProfile);
@@ -636,7 +670,7 @@ export class PentestAgent {
   ): Promise<void> {
     if (!this.ragMemory) return;
 
-    console.log('\n[RAG Memory] Phase 4b: Searching attack playbooks...');
+    this.log('INFO', 'RAG Memory', 'Phase 4b: Searching attack playbooks...');
 
     try {
       const serviceNames = [
@@ -649,12 +683,12 @@ export class PentestAgent {
       });
 
       if (playbooks.length > 0 && formattedText) {
-        console.log(`[RAG Memory] ✓ Injected ${playbooks.length} attack playbook(s)`);
+        this.log('INFO', 'RAG Memory', `✓ Injected ${playbooks.length} attack playbook(s)`);
         this.reasoner.injectMemoryContext(formattedText);
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      console.log('[RAG Memory] ⚠ Failed (continuing without memory):', errorMsg);
+      this.log('WARN', 'RAG Memory', `⚠ Failed (continuing without memory): ${errorMsg}`);
     }
   }
 
@@ -813,9 +847,9 @@ export class PentestAgent {
    * await agent.reconnaissance('192.168.1.0/24');  // Scan a subnet
    * await agent.reconnaissance('scanme.nmap.org'); // Scan a single host
    */
-  async reconnaissance(target: string): Promise<void> {
-    console.log(`\n[Orchestrator] Starting reconnaissance on: ${target}`);
-    console.log(`[Orchestrator] Session ID: ${this.sessionId}`);
+  async reconnaissance(target: string): Promise<ReconResult> {
+    this.log('INFO', 'Orchestrator', `Starting reconnaissance on: ${target}`);
+    this.log('INFO', 'Orchestrator', `Session ID: ${this.sessionId}`);
     console.log('='.repeat(60));
 
     // Initialize loop state
@@ -849,7 +883,7 @@ export class PentestAgent {
 
     while (iteration < maxIterations && !missionComplete) {
       iteration++;
-      console.log(`\n[Orchestrator] === Iteration ${iteration} ===`);
+      this.log('STEP', 'Orchestrator', `=== Iteration ${iteration} ===`);
 
       await startActiveObservation(`iteration-${iteration}`, async (iterSpan) => {
       iterSpan.update({ input: { iteration, observation: observation.substring(0, 500) } });
@@ -879,7 +913,7 @@ export class PentestAgent {
 
       // Check if mission is complete
       if (reasoning.is_complete) {
-        console.log('\n[Orchestrator] Reasoner indicates mission complete');
+        this.log('INFO', 'Orchestrator', 'Reasoner indicates mission complete');
         iterSpan.update({ output: { status: 'mission_complete' } });
         missionComplete = true;
         return;
@@ -992,9 +1026,9 @@ export class PentestAgent {
     }); // end root span
 
     console.log('\n' + '='.repeat(60));
-    console.log('[Orchestrator] Reconnaissance finished');
-    console.log(`[Orchestrator] Total iterations: ${iteration}`);
-    console.log(`[Orchestrator] Results collected: ${aggregatedResults.length}`);
+    this.log('INFO', 'Orchestrator', 'Reconnaissance finished');
+    this.log('INFO', 'Orchestrator', `Total iterations: ${iteration}`);
+    this.log('INFO', 'Orchestrator', `Results collected: ${aggregatedResults.length}`);
 
     // Save any remaining training data
     if (this.config.enableEvaluation && this.trainingPairs.length > 0) {
@@ -1003,9 +1037,9 @@ export class PentestAgent {
 
     // Print summary
     if (aggregatedResults.length > 0) {
-      console.log('\n[Orchestrator] === Summary ===');
+      this.log('INFO', 'Orchestrator', '=== Summary ===');
       aggregatedResults.forEach((result, i) => {
-        console.log(`${i + 1}. [${result.type}] ${result.summary}`);
+        this.log('RESULT', 'Orchestrator', `${i + 1}. [${result.type}] ${result.summary}`);
       });
     }
 
@@ -1019,12 +1053,23 @@ export class PentestAgent {
 
     // Print evaluation summary
     if (this.config.enableEvaluation) {
-      console.log('\n[Orchestrator] === Evaluation Summary ===');
-      console.log(`[Orchestrator] Session ID: ${this.sessionId}`);
-      console.log(
-        `[Orchestrator] Training pairs collected: ${this.trainingPairs.length === 0 ? 'saved' : 'pending save'}`
+      this.log('INFO', 'Orchestrator', '=== Evaluation Summary ===');
+      this.log('INFO', 'Orchestrator', `Session ID: ${this.sessionId}`);
+      this.log(
+        'INFO',
+        'Orchestrator',
+        `Training pairs collected: ${this.trainingPairs.length === 0 ? 'saved' : 'pending save'}`
       );
     }
+
+    return {
+      sessionId: this.sessionId,
+      iterations: iteration,
+      results: aggregatedResults,
+      discoveredServices: allDiscoveredServices,
+      tacticalPlans: allTacticalPlans,
+      intelligence: currentIntelligence,
+    };
   }
 
   /**
@@ -1047,12 +1092,12 @@ export class PentestAgent {
     cleanedData: CleanedData,
     iteration: number
   ): Promise<void> {
-    console.log('\n[Evaluation Loop] Starting evaluation...');
-    console.log(`[Evaluation Loop] Plan ID: ${tacticalPlan.plan_id}`);
-    console.log(`[Evaluation Loop] Attack Vectors: ${tacticalPlan.attack_vectors.length}`);
+    this.log('STEP', 'Evaluation Loop', 'Starting evaluation...');
+    this.log('STEP', 'Evaluation Loop', `Plan ID: ${tacticalPlan.plan_id}`);
+    this.log('STEP', 'Evaluation Loop', `Attack Vectors: ${tacticalPlan.attack_vectors.length}`);
 
     for (const vector of tacticalPlan.attack_vectors) {
-      console.log(`\n[Evaluation Loop] Executing vector: ${vector.vector_id}`);
+      this.log('STEP', 'Evaluation Loop', `Executing vector: ${vector.vector_id}`);
 
       try {
         // Execute attack vector
@@ -1063,22 +1108,24 @@ export class PentestAgent {
         });
 
         if (!toolResult.success) {
-          console.log(`[Evaluation Loop] ⚠ Vector failed: ${toolResult.error}`);
+          this.log('WARN', 'Evaluation Loop', `⚠ Vector failed: ${toolResult.error}`);
           continue;
         }
 
         // Evaluate outcome
-        console.log('[Evaluation Loop] Evaluating outcome...');
+        this.log('STEP', 'Evaluation Loop', 'Evaluating outcome...');
         const evaluation = await this.evaluator.evaluate(
           vector.vector_id,
           vector.prediction_metrics,
           toolResult.output
         );
 
-        console.log(
-          `[Evaluation Loop] ✓ Label: ${evaluation.label} (confidence: ${evaluation.confidence})`
+        this.log(
+          'RESULT',
+          'Evaluation Loop',
+          `✓ Label: ${evaluation.label} (confidence: ${evaluation.confidence})`
         );
-        console.log(`[Evaluation Loop] Reasoning: ${evaluation.reasoning}`);
+        this.log('RESULT', 'Evaluation Loop', `Reasoning: ${evaluation.reasoning}`);
 
         // Create training pair
         const trainingPair: TrainingPair = {
@@ -1099,13 +1146,17 @@ export class PentestAgent {
         };
 
         this.trainingPairs.push(trainingPair);
-        console.log(
-          `[Evaluation Loop] ✓ Training pair collected (total: ${this.trainingPairs.length})`
+        this.log(
+          'RESULT',
+          'Evaluation Loop',
+          `✓ Training pair collected (total: ${this.trainingPairs.length})`
         );
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.log(
-          `[Evaluation Loop] ⚠ Failed to evaluate vector ${vector.vector_id}: ${errorMessage}`
+        this.log(
+          'ERROR',
+          'Evaluation Loop',
+          `⚠ Failed to evaluate vector ${vector.vector_id}: ${errorMessage}`
         );
       }
     }
@@ -1144,15 +1195,13 @@ export class PentestAgent {
       // Write training pairs to file
       await fs.writeFile(filepath, JSON.stringify(this.trainingPairs, null, 2), 'utf-8');
 
-      console.log(
-        `[Training Data] ✓ Saved ${this.trainingPairs.length} training pairs to ${filename}`
-      );
+      this.log('RESULT', 'Training Data', `✓ Saved ${this.trainingPairs.length} training pairs to ${filename}`);
 
       // Clear training pairs after saving
       this.trainingPairs = [];
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.log(`[Training Data] ⚠ Failed to save training data: ${errorMessage}`);
+      this.log('WARN', 'Training Data', `⚠ Failed to save training data: ${errorMessage}`);
     }
   }
 
@@ -1228,7 +1277,7 @@ export class PentestAgent {
       await fs.appendFile(filepath, jsonLine, 'utf-8');
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.log(`[Session Logging] ⚠ Failed to log session step: ${errorMessage}`);
+      this.log('WARN', 'Session Logging', `⚠ Failed to log session step: ${errorMessage}`);
     }
   }
 
@@ -1319,15 +1368,13 @@ export class PentestAgent {
         const filename = `${this.sessionId}_${plan.plan_id}.json`;
         const filepath = path.join(tacticalDir, filename);
         await fs.writeFile(filepath, JSON.stringify(plan, null, 2), 'utf-8');
-        console.log(`[Tactical Plan] ✓ Saved ${filename}`);
+        this.log('RESULT', 'Tactical Plan', `✓ Saved ${filename}`);
       }
 
-      console.log(
-        `[Tactical Plan] ✓ ${plans.length} plan(s) saved to ${tacticalDir}`
-      );
+      this.log('RESULT', 'Tactical Plan', `✓ ${plans.length} plan(s) saved to ${tacticalDir}`);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.log(`[Tactical Plan] ⚠ Failed to save tactical plans: ${errorMessage}`);
+      this.log('WARN', 'Tactical Plan', `⚠ Failed to save tactical plans: ${errorMessage}`);
     }
   }
 
@@ -1419,6 +1466,6 @@ export class PentestAgent {
    */
   async shutdown(): Promise<void> {
     await this.mcpAgent.shutdown();
-    console.log('[Orchestrator] Shutdown complete');
+    this.log('INFO', 'Orchestrator', 'Shutdown complete');
   }
 }

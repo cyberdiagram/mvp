@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc && node dist/index.js"
+    "dev": "tsc && node dist/index.js",
+    "worker": "tsc && node dist/worker.js",
+    "worker:dev": "tsx src/worker.ts"
   },
   "repository": {
     "type": "git",
@@ -24,14 +26,17 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.29",
     "@anthropic-ai/sdk": "^0.72.1",
     "@cyber/mcp-rag-memory-client": "file:.yalc/@cyber/mcp-rag-memory-client",
-    "@modelcontextprotocol/sdk": "^1.26.0",
     "@langfuse/otel": "^4.5.1",
     "@langfuse/tracing": "^4.5.1",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "@opentelemetry/sdk-node": "^0.211.0",
     "dotenv": "^17.2.3",
+    "ioredis": "^5.9.3",
     "typescript": "^5.9.3"
   },
   "devDependencies": {
-    "@types/node": "^25.2.0"
+    "@types/ioredis": "^4.28.10",
+    "@types/node": "^25.2.0",
+    "tsx": "^4.19.2"
   }
 }

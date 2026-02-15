@@ -22,8 +22,12 @@ services:
     tty: true
 
   kali:
-    build: ./kali
+    build:
+      context: ./kali
+      network: host
     container_name: pentest-kali
+    ports:
+      - "3001:3001"
     volumes:
       - kali_scripts:/app/scripts
       - kali_logs:/app/logs

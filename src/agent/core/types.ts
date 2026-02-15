@@ -1,5 +1,17 @@
 // Shared types for subagent definitions
 
+// ==================== STRUCTURED LOGGING ====================
+
+/** Log severity levels for structured log output. */
+export type LogLevel = 'INFO' | 'STEP' | 'RESULT' | 'VULN' | 'WARN' | 'ERROR';
+
+/** Structured log entry emitted via the onLog callback. */
+export interface LogEntry {
+  level: LogLevel;
+  phase: string;
+  message: string;
+}
+
 /**
  * Output from the ReasonerAgent's strategic decision-making.
  *
@@ -84,6 +96,16 @@ export interface CleanedData {
   summary: string;
   /** Intelligence context from Intelligence Layer (optional) */
   intelligence?: IntelligenceContext;
+}
+
+/** Result returned by the reconnaissance method for downstream consumption. */
+export interface ReconResult {
+  sessionId: string;
+  iterations: number;
+  results: CleanedData[];
+  discoveredServices: DiscoveredService[];
+  tacticalPlans: TacticalPlanObject[];
+  intelligence: IntelligenceContext | null;
 }
 
 /**

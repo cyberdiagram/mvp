@@ -2,16 +2,16 @@
 
 ![Visitors](https://api.visitorbadge.io/api/visitors?path=flashoop/mvp&label=VISITORS&countColor=%23263238)
 
-> **Last Updated:** 2026-02-14
-> **Architecture Version:** 3.1 (Legacy Cleanup & Restructure)
-> **Latest Feature:** Legacy code removal, evaluator moved to intelligence layer, instrumentation moved to utils (2026-02-14)
+> **Last Updated:** 2026-02-15
+> **Architecture Version:** 3.2 (Engine Worker + Cyber-Bridge Integration)
+> **Latest Feature:** Redis engine worker connecting PentestAgent to Cyber-Bridge web UI via Redis queue + Pub/Sub (2026-02-15)
 
 An AI-powered penetration testing agent using Claude AI with a hierarchical multi-agent architecture, Intelligence Layer for target profiling, Evaluation Loop for continuous improvement, and RAG Memory System that queries security playbooks (successful techniques) and anti-patterns (failed exploits) from past experiences.
 
 ## Architecture
 
-**Version**: 3.0 (Dual MCP + Docker Architecture)
-**Last Updated**: 2026-02-13
+**Version**: 3.2 (Dual MCP + Docker + Engine Worker)
+**Last Updated**: 2026-02-15
 
 ### Overview
 
@@ -70,7 +70,37 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
           └──────────────────────────────────────────────────┘
 ```
 
-**Key Features (v3.0)**:
+### Engine Worker (Cyber-Bridge Integration)
+
+The engine worker (`src/worker.ts`) connects the PentestAgent to the [Cyber-Bridge](../cyber-bridge) web middleware via Redis, enabling a full web UI → agent → results loop:
+
+```
+Web UI → Cyber-Bridge API → Redis LPUSH cyberbridge:tasks
+                                     ↓
+               MVP worker.ts → BRPOP cyberbridge:tasks
+                                     ↓
+                          PentestAgent.reconnaissance(target)
+                                     ↓ (real-time)
+                          PUBLISH logs:{tenant}:{taskId}  →  Cyber-Bridge → WebSocket → Web UI
+                                     ↓ (on complete)
+                          PUBLISH complete:{tenant}:{taskId}
+                          HSET task:{tenant}:{taskId} state=completed result=...
+```
+
+**Phase-to-Method Mapping:**
+
+| Phase | Agent Method | Notes |
+|-------|-------------|-------|
+| `recon` | `reconnaissance(target)` | Primary use case, returns `ReconResult` |
+| `plan` | `reconnaissance(target)` | Same flow — recon produces tactical plans |
+| `exec` | `agenticExecutor.runAgentLoop(target, 15)` | Requires Kali MCP connection |
+| `report` | Reserved for future | Returns error: "phase not yet supported" |
+
+**Structured Logging:**
+
+All orchestrator and AgenticExecutor logs are emitted as structured `LogEntry` objects (`{ level, phase, message }`) via an optional `onLog` callback. The worker serializes each entry and publishes it to Redis Pub/Sub, enabling the frontend to filter by level (INFO, STEP, RESULT, VULN, WARN, ERROR) and group by phase.
+
+**Key Features (v3.2)**:
 - ✅ **Docker Deployment**: Brain (Node.js) + Kali (Python FastMCP) containers on bridge network
 - ✅ **Dual MCP Architecture**: RAG Memory (stdio on host) + Kali (HTTP in Docker) replacing 3 stdio servers
 - ✅ **AgenticExecutor**: OODA loop engine for autonomous exploit execution (generate, execute, plan-based, agentic)
@@ -84,6 +114,9 @@ An AI-powered penetration testing agent using Claude AI with a hierarchical mult
 - ✅ **Tactical Plan Passthrough**: Executor uses Reasoner's tactical plan directly
 - ✅ **Explicit Failure Feedback**: Failed tool executions reported to Reasoner with context
 - ✅ **Service Deduplication**: `host:port` dedup prevents context bloat
+- ✅ **Engine Worker**: Redis consumer connecting PentestAgent to Cyber-Bridge web UI
+- ✅ **Structured Logging**: `LogEntry` objects with level/phase/message for real-time log relay via Redis Pub/Sub
+- ✅ **ReconResult Return Type**: `reconnaissance()` returns structured results for downstream consumption
 
 ### Layered Architecture Components
 
@@ -199,6 +232,7 @@ docker/
 
 src/
 ├── index.ts                        # Interactive CLI (recon + 6 exploit commands)
+├── worker.ts                       # Redis consumer entry point (Cyber-Bridge integration)
 ├── config/
 │   └── agent_rules.json            # Memory Manager rules (persistent)
 ├── skills/
@@ -257,6 +291,7 @@ logs/
 - Node.js 20+
 - Docker & Docker Compose (for Kali container)
 - Anthropic API key
+- Redis 7+ (for engine worker / Cyber-Bridge integration)
 
 ### Install Dependencies
 
@@ -312,6 +347,10 @@ export TRAINING_DATA_PATH="./logs/training_data"
 # RAG Memory System (optional)
 export ENABLE_RAG_MEMORY="true"
 
+# Redis (for engine worker / Cyber-Bridge integration)
+export REDIS_HOST="localhost"       # Default
+export REDIS_PORT="6379"            # Default
+
 # Langfuse Observability (optional)
 export LANGFUSE_SECRET_KEY="sk-lf-xxx"
 export LANGFUSE_PUBLIC_KEY="pk-lf-xxx"
@@ -324,8 +363,14 @@ export LANGFUSE_BASE_URL="https://cloud.langfuse.com"
 # Build
 npm run build
 
-# Start the agent (interactive mode)
+# Start the agent (interactive CLI mode)
 npm start
+
+# Start the engine worker (Redis consumer for Cyber-Bridge)
+npm run worker
+
+# Start the engine worker in dev mode (no build step)
+npm run worker:dev
 ```
 
 ### Interactive Commands
@@ -740,7 +785,67 @@ yalc add @cyber/mcp-rag-memory-client && npm install
 **Main Agent Integration:**
 Session logs are automatically written to `logs/sessions/<session_id>.jsonl` for RAG ETL processing.
 
-## Testing MCP Integrations
+## Testing
+
+### Testing Engine Worker (Cyber-Bridge Integration)
+
+This is the full end-to-end test for the Redis-based engine worker.
+
+**Step 1: Start Redis**
+```bash
+# From the cyber-bridge project
+cd /home/leo/cyber-bridge && docker compose up redis -d
+```
+
+**Step 2: Start the Cyber-Bridge middleware**
+```bash
+cd /home/leo/cyber-bridge && npm run dev
+```
+
+**Step 3: Start the Kali MCP server** (required for `exec` phase tasks)
+```bash
+cd /home/leo/mvp/docker && docker compose up kali -d
+```
+
+**Step 4: Start the MVP engine worker**
+```bash
+cd /home/leo/mvp && npm run worker:dev
+```
+
+**Step 5: Create a task** (from the cyber-bridge examples)
+```bash
+cd /home/leo/cyber-bridge && npx tsx examples/01-web-create-task.ts
+```
+
+**Step 6: Observe the full loop**
+- Worker terminal: Picks up the task, shows real-time agent logs
+- Web client (script 01): Receives `task:log` events streamed in real time
+- Web client: Receives `task:complete` with the result payload
+
+**Step 7: Verify in Redis**
+```bash
+redis-cli HGETALL task:demo-tenant:<taskId>
+# Should show state=completed and populated result field
+```
+
+**Expected Worker Output:**
+```
+MVP Engine Worker
+=================
+[redis:worker] connected
+[redis:blocking] connected
+[Orchestrator] Initializing multi-agent system...
+[Orchestrator] Ready!
+[worker] Listening on queue: cyberbridge:tasks
+[worker] Waiting for tasks... (Ctrl+C to stop)
+
+[worker] Picked up task: abc123 (tenant: demo-tenant)
+[worker] Phase: recon, Target: scanme.nmap.org
+[Orchestrator] Starting reconnaissance on: scanme.nmap.org
+...
+[worker] Task abc123 state -> completed
+[worker] Done with task abc123
+```
 
 ### Testing Kali MCP Server
 
@@ -784,7 +889,7 @@ npm run dev
 [RAG Memory] ✓ Found 2 playbooks, 1 anti-patterns
 ```
 
-### Testing Exploit Execution (New in v3.0)
+### Testing Exploit Execution
 
 ```bash
 # Start Kali container
@@ -827,6 +932,12 @@ cd /home/leo/mvp/docker && docker compose up --build
 - Check ChromaDB has documents: `npm run seed` in pentest-rag-memory
 - Verify query matches seeded service names (e.g., "pfsense", "apache")
 
+**Issue: Worker not picking up tasks**
+- Verify Redis is running: `redis-cli ping` (should return `PONG`)
+- Check the queue: `redis-cli LLEN cyberbridge:tasks`
+- Verify `REDIS_HOST` and `REDIS_PORT` env vars match your Redis instance
+- Ensure cyber-bridge is pushing tasks to the correct queue name
+
 ## MCP Architecture
 
 ### Dual MCP Transport
@@ -852,8 +963,8 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
 ## Implementation Status
 
-**Architecture Version**: 3.0 (Dual MCP + Docker Architecture)
-**Completion**: Phase 1-7 ✅ + Agent Loop Hardening ✅ + Observability ✅ + Docker + Dual MCP + OODA Loop ✅
+**Architecture Version**: 3.2 (Dual MCP + Docker + Engine Worker)
+**Completion**: Phase 1-7 ✅ + Agent Loop Hardening ✅ + Observability ✅ + Docker + Dual MCP + OODA Loop ✅ + Engine Worker ✅
 
 ### Summary (Phase 1-7)
 
@@ -868,7 +979,16 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 | **Phase 6** | Evaluator Agent | ✅ Complete | TP/FP/FN/TN labeling, prediction comparison, training data generation |
 | **Phase 7** | Orchestrator Integration | ✅ Complete | Parallel intelligence execution, RAG memory recall, evaluation loop, training data persistence |
 
-### Recent Enhancements (2026-02-13)
+### Recent Enhancements (2026-02-15)
+
+**Engine Worker + Cyber-Bridge Integration (v3.2)**:
+- ✅ **Engine Worker** (`src/worker.ts`): Redis consumer entry point that connects PentestAgent to Cyber-Bridge web UI
+- ✅ **Structured Logging**: All orchestrator and AgenticExecutor logs upgraded to `LogEntry` objects (`{ level, phase, message }`)
+- ✅ **`onLog` Callback**: Optional callback in `AgentConfig` for real-time log relay — worker publishes to Redis Pub/Sub
+- ✅ **`ReconResult` Return Type**: `reconnaissance()` now returns structured results (`sessionId`, `iterations`, `results`, `discoveredServices`, `tacticalPlans`, `intelligence`)
+- ✅ **Phase Mapping**: `recon`/`plan` → `reconnaissance()`, `exec` → `runAgentLoop()`, `report` → reserved
+- ✅ **Completion Signaling**: Atomic `HSET` + `PUBLISH` with result payload on task completion
+- ✅ **Standalone Compatibility**: CLI mode works identically — `onLog` is optional, `ioredis` only imported in `worker.ts`
 
 **Dual MCP + Docker Architecture (v3.0)**:
 - ✅ **Docker Deployment**: Brain + Kali containers on bridge network with Docker Compose
@@ -900,15 +1020,15 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
 ## Next Steps
 
-1. **Docker Pod Testing**: Verify full brain↔kali communication
-   - Build and start Docker Compose pod
-   - Test all 6 CLI commands against Kali container
-   - Verify RAG Memory stdio works inside brain container
+1. **End-to-End Bridge Testing**: Verify full Web UI → Cyber-Bridge → Worker → Agent loop
+   - Start Redis + Cyber-Bridge + Worker + Kali stack
+   - Create tasks from the web UI and observe real-time log streaming
+   - Verify completion results arrive in the web client
 
-2. **OODA Loop Validation**: Test AgenticExecutor against real targets
-   - Test `autonomous` command with CVE exploitation tasks
-   - Test `plan` command with tactical plan files
-   - Verify Langfuse tracing captures all OODA turns
+2. **Report Phase Implementation**: Add report generation to the worker
+   - Generate structured pentest reports from `ReconResult` data
+   - Support PDF/HTML output formats
+   - Wire to the `report` phase in the worker's phase mapping
 
 3. **RAG Memory ETL Pipeline**: Complete learning loop
    - Process session JSONL logs into anti-patterns
@@ -923,7 +1043,7 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 5. **Multi-Tenant Deployment**: Scale to parallel engagements
    - Multiple Kali containers per engagement
    - Shared RAG Memory across sessions
-   - Result aggregation and reporting
+   - Concurrent worker instances with task-level isolation
 
 ---
 
@@ -973,10 +1093,11 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 | `src/agent/utils/instrumentation.ts` | 43 | Langfuse/OpenTelemetry tracing setup (conditional on env vars) |
 | `src/agent/utils/index.ts` | 3 | Barrel export |
 
-**Entry Points** (528 lines):
+**Entry Points** (720 lines):
 | File | Lines | Purpose |
 |------|-------|---------|
 | `src/index.ts` | 522 | Interactive CLI with REPL, exploit commands, and Memory Manager |
+| `src/worker.ts` | 192 | Redis consumer entry point (Cyber-Bridge engine worker) |
 | `src/agent/index.ts` | 6 | Main agent barrel export |
 
 #### Layer Documentation (228 lines)

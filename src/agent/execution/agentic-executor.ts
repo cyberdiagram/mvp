@@ -23,7 +23,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { startActiveObservation, propagateAttributes } from '@langfuse/tracing';
 import { DualMCPAgent } from './mcp-agent.js';
 import { SkillManager } from '../utils/skill-manager.js';
-import type { TacticalPlanObject, AgentResult, ToolCallRecord } from '../core/types.js';
+import type { TacticalPlanObject, AgentResult, ToolCallRecord, LogLevel, LogEntry } from '../core/types.js';
 
 // ─── System Prompts ──────────────────────────────────────────
 
@@ -139,6 +139,9 @@ export class AgenticExecutor {
   private model: string;
   private sessionId: string;
 
+  /** Optional structured log callback, injected by the orchestrator. */
+  private onLog?: (entry: LogEntry) => void;
+
   /** Names of tools on the Kali MCP server (populated dynamically) */
   private kaliToolNames: Set<string> = new Set();
   /** Full tool definitions array for Claude API (Kali + host-local) */
@@ -160,6 +163,22 @@ export class AgenticExecutor {
   }
 
   /**
+   * Sets the onLog callback for structured log relay.
+   * Called by PentestAgent after construction when onLog is configured.
+   */
+  setOnLog(callback: (entry: LogEntry) => void): void {
+    this.onLog = callback;
+  }
+
+  /**
+   * Logs a structured message to console and optionally to the onLog callback.
+   */
+  private log(level: LogLevel, phase: string, message: string): void {
+    console.log(`[${phase}] ${message}`);
+    this.onLog?.({ level, phase, message });
+  }
+
+  /**
    * Builds tool definitions dynamically from Kali MCP server discovery + host-local tools.
    * Called at construction and can be refreshed if Kali reconnects.
    */
@@ -173,9 +192,10 @@ export class AgenticExecutor {
     // Combine Kali + host-local tools
     this.toolDefinitions = [...kaliToolDefs, ...HOST_TOOL_DEFINITIONS];
 
-    console.log(
-      `[AgenticExecutor] ${this.toolDefinitions.length} tools available ` +
-        `(${kaliNames.length} Kali + ${HOST_TOOL_DEFINITIONS.length} host-local)`
+    this.log(
+      'INFO',
+      'AgenticExecutor',
+      `${this.toolDefinitions.length} tools available (${kaliNames.length} Kali + ${HOST_TOOL_DEFINITIONS.length} host-local)`
     );
   }
 
@@ -415,20 +435,20 @@ ${task}`;
     return startActiveObservation('auto-execute', async (rootSpan) => {
       rootSpan.update({ input: { task: task.substring(0, 500) } });
 
-      console.log('\n[1/3] Generating script with Claude...');
+      this.log('STEP', 'AgenticExecutor', '[1/3] Generating script with Claude...');
       const script = await this.generateScript(task);
 
       const filename = `poc_${Date.now()}.py`;
 
-      console.log('[2/3] Writing script to Kali container...');
+      this.log('STEP', 'AgenticExecutor', '[2/3] Writing script to Kali container...');
       const writeResult = await startActiveObservation('write-file', async (span) => {
         const res = await this.mcpAgent.callKaliTool('write_file', { filename, content: script });
         span.update({ output: { filename, result: res } });
         return res;
       });
-      console.log(`  ${writeResult}`);
+      this.log('RESULT', 'AgenticExecutor', `${writeResult}`);
 
-      console.log('[3/3] Executing script...');
+      this.log('STEP', 'AgenticExecutor', '[3/3] Executing script...');
       const result = await startActiveObservation('execute-script', async (span) => {
         const res = await this.mcpAgent.callKaliTool('execute_script', { filename });
         span.update({
@@ -454,14 +474,14 @@ ${task}`;
 
       const filename = `poc_${Date.now()}.py`;
 
-      console.log('\n[1/2] Writing script to Kali container...');
+      this.log('STEP', 'AgenticExecutor', '[1/2] Writing script to Kali container...');
       const writeResult = await this.mcpAgent.callKaliTool('write_file', {
         filename,
         content: script,
       });
-      console.log(`  ${writeResult}`);
+      this.log('RESULT', 'AgenticExecutor', `${writeResult}`);
 
-      console.log('[2/2] Executing script...');
+      this.log('STEP', 'AgenticExecutor', '[2/2] Executing script...');
       const result = await startActiveObservation('execute-script', async (span) => {
         const res = await this.mcpAgent.callKaliTool('execute_script', { filename });
         span.update({
@@ -582,20 +602,20 @@ ${task}`;
     return startActiveObservation('auto-execute-from-plan', async (rootSpan) => {
       rootSpan.update({ input: { planId: plan.plan_id, targetIp: plan.target_ip } });
 
-      console.log(`\n[1/3] Generating exploit from Tactical Plan (${plan.plan_id})...`);
+      this.log('STEP', 'AgenticExecutor', `[1/3] Generating exploit from Tactical Plan (${plan.plan_id})...`);
       const script = await this.generateScriptFromPlan(plan);
 
       const filename = `poc_${plan.plan_id}_${Date.now()}.py`;
 
-      console.log('[2/3] Writing script to Kali container...');
+      this.log('STEP', 'AgenticExecutor', '[2/3] Writing script to Kali container...');
       const writeResult = await startActiveObservation('write-file', async (span) => {
         const res = await this.mcpAgent.callKaliTool('write_file', { filename, content: script });
         span.update({ output: { filename, result: res } });
         return res;
       });
-      console.log(`  ${writeResult}`);
+      this.log('RESULT', 'AgenticExecutor', `${writeResult}`);
 
-      console.log('[3/3] Executing script...');
+      this.log('STEP', 'AgenticExecutor', '[3/3] Executing script...');
       const result = await startActiveObservation('execute-script', async (span) => {
         const res = await this.mcpAgent.callKaliTool('execute_script', { filename });
         span.update({
@@ -794,7 +814,7 @@ ${planContext}
 
           for (let turn = 0; turn < maxTurns; turn++) {
             turnsUsed++;
-            console.log(`\n--- Agent Turn ${turnsUsed} ---`);
+            this.log('STEP', 'AgenticExecutor', `--- Agent Turn ${turnsUsed} ---`);
 
             const turnResult = await startActiveObservation(
               `turn-${turnsUsed}`,
@@ -833,8 +853,10 @@ ${planContext}
 
                 totalInputTokens += response.usage.input_tokens;
                 totalOutputTokens += response.usage.output_tokens;
-                console.log(
-                  `  [tokens] in=${response.usage.input_tokens} out=${response.usage.output_tokens} | cumulative: ${totalInputTokens}+${totalOutputTokens}=${totalInputTokens + totalOutputTokens}`
+                this.log(
+                  'INFO',
+                  'AgenticExecutor',
+                  `[tokens] in=${response.usage.input_tokens} out=${response.usage.output_tokens} | cumulative: ${totalInputTokens}+${totalOutputTokens}=${totalInputTokens + totalOutputTokens}`
                 );
 
                 // Append assistant response to conversation
@@ -845,7 +867,7 @@ ${planContext}
                   const textBlock = response.content.find((b) => b.type === 'text');
                   const finalText =
                     textBlock && textBlock.type === 'text' ? textBlock.text : '';
-                  console.log('\n--- Agent Complete ---');
+                  this.log('INFO', 'AgenticExecutor', '--- Agent Complete ---');
                   turnSpan.update({
                     output: { status: 'complete', finalTextLength: finalText.length },
                   });
@@ -864,8 +886,10 @@ ${planContext}
                   for (const block of toolUseBlocks) {
                     if (block.type !== 'tool_use') continue;
 
-                    console.log(
-                      `  [tool] ${block.name}(${JSON.stringify(block.input).substring(0, 120)}...)`
+                    this.log(
+                      'STEP',
+                      'AgenticExecutor',
+                      `[tool] ${block.name}(${JSON.stringify(block.input).substring(0, 120)}...)`
                     );
 
                     // ── Tool Dispatch (traced) ──
@@ -890,7 +914,7 @@ ${planContext}
                     // Log for debugging
                     const preview =
                       result.length > 200 ? result.substring(0, 200) + '...' : result;
-                    console.log(`  [result] ${preview}`);
+                    this.log('RESULT', 'AgenticExecutor', `[result] ${preview}`);
 
                     toolCalls.push({
                       name: block.name,
@@ -955,7 +979,7 @@ ${planContext}
 
           // Max turns exceeded
           const durationMs = Date.now() - startTime;
-          console.log(`\n--- Agent stopped: max turns (${maxTurns}) reached ---`);
+          this.log('WARN', 'AgenticExecutor', `--- Agent stopped: max turns (${maxTurns}) reached ---`);
           const lastAssistant = messages.filter((m) => m.role === 'assistant').pop();
           let finalText = '[Agent stopped — max turns reached]';
           if (lastAssistant && Array.isArray(lastAssistant.content)) {
@@ -1013,22 +1037,24 @@ ${planContext}
     const durationSec = (durationMs / 1000).toFixed(1);
     const avgTokensPerTurn = turnsUsed > 0 ? Math.round(totalTokens / turnsUsed) : 0;
 
-    console.log('\n--- Trace Statistics ---');
-    console.log(`Status:          ${status}`);
-    console.log(`Duration:        ${durationSec}s`);
-    console.log(`Turns:           ${turnsUsed} / ${maxTurns}`);
-    console.log(
+    this.log('INFO', 'AgenticExecutor', '--- Trace Statistics ---');
+    this.log('INFO', 'AgenticExecutor', `Status:          ${status}`);
+    this.log('INFO', 'AgenticExecutor', `Duration:        ${durationSec}s`);
+    this.log('INFO', 'AgenticExecutor', `Turns:           ${turnsUsed} / ${maxTurns}`);
+    this.log(
+      'INFO',
+      'AgenticExecutor',
       `Total tokens:    ${totalTokens} (in: ${totalInputTokens}, out: ${totalOutputTokens})`
     );
-    console.log(`Avg tokens/turn: ${avgTokensPerTurn}`);
-    console.log(`Tool calls:      ${totalToolCalls}`);
+    this.log('INFO', 'AgenticExecutor', `Avg tokens/turn: ${avgTokensPerTurn}`);
+    this.log('INFO', 'AgenticExecutor', `Tool calls:      ${totalToolCalls}`);
     if (Object.keys(toolUsageCounts).length > 0) {
       const breakdown = Object.entries(toolUsageCounts)
         .sort((a, b) => b[1] - a[1])
         .map(([name, count]) => `${name}(${count})`)
         .join(', ');
-      console.log(`Tool breakdown:  ${breakdown}`);
+      this.log('INFO', 'AgenticExecutor', `Tool breakdown:  ${breakdown}`);
     }
-    console.log(`Session:         ${this.sessionId}`);
+    this.log('INFO', 'AgenticExecutor', `Session:         ${this.sessionId}`);
   }
 }
