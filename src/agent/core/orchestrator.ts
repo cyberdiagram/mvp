@@ -287,29 +287,28 @@ export class PentestAgent {
   /**
    * Writes a Phase 4 intelligence record to logs/Intelligence/.
    *
-   * Only records fields that contain valid data:
+   * Always writes a file when Phase 4 analyzed new services. Optional fields
+   * are included only when they contain valid data:
    * - target_profile  — omitted when null
    * - vulnerabilities — omitted when empty
    * - rag_playbooks   — omitted when empty
    *
-   * Each iteration produces one file:
+   * Each iteration that analyzes new services produces one file:
    *   logs/Intelligence/<sessionId>_iter<NN>.json
    *
-   * @param iteration      - Current loop iteration number
-   * @param profile        - Profiler result (null if failed/no data)
+   * @param iteration       - Current loop iteration number
+   * @param newServices     - Services analyzed this iteration (always present)
+   * @param profile         - Profiler result (null if failed/no data)
    * @param vulnerabilities - VulnLookup results (may be empty)
-   * @param playbooks      - RAG searchHandbook results (may be empty)
+   * @param playbooks       - RAG searchHandbook results (may be empty)
    */
   private async _logIntelligenceRecord(
     iteration: number,
+    newServices: DiscoveredService[],
     profile: TargetProfile | null,
     vulnerabilities: VulnerabilityInfo[],
     playbooks: RAGMemoryDocument[]
   ): Promise<void> {
-    if (!profile && vulnerabilities.length === 0 && playbooks.length === 0) {
-      return; // Nothing valid to log
-    }
-
     try {
       const fs = await import('fs/promises');
       const path = await import('path');
@@ -321,6 +320,7 @@ export class PentestAgent {
         session_id: this.sessionId,
         iteration,
         timestamp: new Date().toISOString(),
+        new_services: newServices,
       };
 
       if (profile) {
@@ -715,7 +715,7 @@ export class PentestAgent {
     const ragPlaybooks = await this._runRAGMemoryForIntelligence(newServices, validNewVulns, newTargetProfile);
 
     // Log this iteration's intelligence data to logs/Intelligence/
-    await this._logIntelligenceRecord(iteration, newTargetProfile, validNewVulns, ragPlaybooks);
+    await this._logIntelligenceRecord(iteration, newServices, newTargetProfile, validNewVulns, ragPlaybooks);
 
     return intelligence;
   }
