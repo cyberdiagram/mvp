@@ -106,7 +106,12 @@ export class DualMCPAgent {
     }
 
     const { tool, arguments: args } = step;
-    console.log(`[DualMCPAgent] Executing: ${tool}`);
+    const argSummary = tool === 'execute_shell_cmd'
+      ? `("${args?.command ?? ''}")`
+      : Object.keys(args ?? {}).length > 0
+        ? `(${JSON.stringify(args)})`
+        : '';
+    console.log(`[DualMCPAgent] Executing: ${tool}${argSummary}`);
 
     try {
       if (tool.startsWith('rag_')) {
@@ -135,6 +140,12 @@ export class DualMCPAgent {
   async callKaliTool(name: string, args: Record<string, unknown>): Promise<string> {
     if (!this.kaliClient) {
       throw new Error('Kali MCP client not connected');
+    }
+
+    if (name === 'execute_shell_cmd') {
+      console.log(`[DualMCPAgent] → cmd: ${args?.command ?? '(no command)'}`);
+    } else if (Object.keys(args).length > 0) {
+      console.log(`[DualMCPAgent] → args: ${JSON.stringify(args)}`);
     }
 
     const result = await this.kaliClient.callTool({ name, arguments: args });

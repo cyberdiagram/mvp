@@ -324,6 +324,11 @@ cd docker && docker compose up --build
 cd docker && docker compose up kali -d
 ```
 
+> **Note:** The Kali container uses `network_mode: host` (not a bridge network with port mapping).
+> This is required when running Docker inside a VM (Parallels, VMware) where Docker bridge interfaces
+> may not get an IPv4 gateway address, causing `docker-proxy` to silently drop forwarded connections.
+> With host networking, the container binds directly to port 3001 on the host.
+
 The Kali container runs a FastMCP server on port 3001 with 6 tools:
 - **Dynamic Execution**: `execute_shell_cmd`, `write_file`, `execute_script`, `manage_packages`
 - **Information Retrieval**: `searchsploit_search`, `searchsploit_examine`
@@ -1143,6 +1148,106 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 - **20+ TypeScript interfaces** for type-safe agent communication
 - **4 Skill Documents**: Nmap (818), Fingerprint parsing (218), GitHub search (61), WPScan (13)
 - **5 Layer READMEs** documenting architecture and data flow
+
+---
+
+## Troubleshooting
+
+### Kali MCP Connection Timeout (`MCP error -32001`)
+
+**Symptom:**
+```
+[DualMCPAgent] Kali MCP connection failed: McpError: MCP error -32001: Request timed out
+```
+
+**Root Cause:**
+Docker custom bridge networks (`pentest-net`) can fail to assign an IPv4 address to the host-side bridge interface (e.g., `br-e3923e56e0fc`). When this happens, `docker-proxy` accepts TCP connections on `localhost:3001` but cannot forward them into the container — the host has no route to `172.18.0.x`. This is common when running Docker inside a VM (e.g., Parallels, VMware).
+
+Symptom of the broken network:
+```bash
+ip addr show br-<network-id>
+# Shows only IPv6 link-local, NO 172.18.0.1 IPv4 address
+ip route | grep 172.18
+# Returns nothing — host has no route to container subnet
+```
+
+**Fix — use `network_mode: host` for the Kali container:**
+
+The `docker/docker-compose.yml` already includes this fix. Instead of a bridge network with port mapping, the Kali container binds directly to the host's port 3001:
+
+```yaml
+kali:
+  network_mode: host   # Binds directly to host network — no broken bridge forwarding
+```
+
+To apply manually if needed:
+```bash
+docker stop pentest-kali && docker rm pentest-kali
+docker run -d \
+  --name pentest-kali \
+  --network host \
+  -v kali_scripts:/app/scripts \
+  -v kali_logs:/app/logs \
+  -e PYTHONUNBUFFERED=1 \
+  --restart unless-stopped \
+  docker-kali \
+  python3 server.py
+```
+
+Verify it works:
+```bash
+curl -s -X POST http://localhost:3001/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
+# Should return: event: message\ndata: {"jsonrpc":"2.0","id":1,"result":...}
+```
+
+---
+
+## Known Issues
+
+### RAG Memory Context Overflow → Reasoner 400 Token Error
+
+**Status**: Partially mitigated (DataCleaner fixed), root cause unresolved
+**Discovered**: 2026-02-20
+**Error**:
+```
+Error: 400 {"type":"error","error":{"type":"invalid_request_error",
+"message":"prompt is too long: 218687 tokens > 200000 maximum"}}
+```
+
+**Root Cause**:
+`rag_query_playbooks` and `rag_recall` return raw playbook/anti-pattern documents that flow directly into the Reasoner's system prompt via `injectMemoryContext()` with **no truncation**. Large ChromaDB documents can push the combined Reasoner prompt over the 200k token limit.
+
+The full prompt composition that can overflow (Reasoner, Sonnet 4, 200k limit):
+
+```
+REASONER_SYSTEM_PROMPT        ~3k tokens (static)
++ skillContext                variable (nmap_skill.md = ~800 tokens)
++ intelligenceContext         capped (services ×5, vulns ×10)
++ memoryContext               ← NOT CAPPED — verbatim playbook docs
++ conversationHistory         grows every turn
+```
+
+**Data flow for `memoryContext`** (bypasses DataCleaner entirely):
+```
+rag_query_playbooks (MCP) → parseRAGOutput() → pattern.prompt_text verbatim
+  → searchHandbook() formats string → orchestrator calls injectMemoryContext()
+  → reasoner.ts Block 4: pushed to API system[] with NO truncation
+```
+
+**What was already fixed** (`data-cleaner.ts`):
+- `rag_*` tools now short-circuit rule-based parsing — no LLM call made
+- Added `MAX_RAW_OUTPUT_CHARS = 80_000` truncation guard for all other large outputs
+
+**Remaining fix needed** (`rag-memory-agent.ts` + `reasoner.ts`):
+1. Truncate each `p.document` string in `searchHandbook()` / `recallInternalWarnings()` before building `formattedText`
+2. Add a total-size cap inside `injectMemoryContext()` in `reasoner.ts` as a hard safety net
+
+**Relevant files**:
+- [`src/agent/knowledge/rag-memory-agent.ts`](src/agent/knowledge/rag-memory-agent.ts) — `searchHandbook()`, `recallInternalWarnings()`, `parseRAGOutput()`
+- [`src/agent/intelligence/reasoner.ts`](src/agent/intelligence/reasoner.ts) — `injectMemoryContext()`, `reason()` Block 4
 
 ---
 

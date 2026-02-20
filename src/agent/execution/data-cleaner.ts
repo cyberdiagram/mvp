@@ -19,6 +19,13 @@ export const DATA_CLEANER_MODEL = 'claude-haiku-4-5-20251001';
 export const DATA_CLEANER_MAX_TOKENS = 2000;
 
 /**
+ * Max characters of raw output to send to the LLM.
+ * Prevents exceeding the 200k token context window.
+ * 80k chars ≈ ~20k tokens, leaving ample room for system prompt + response.
+ */
+export const MAX_RAW_OUTPUT_CHARS = 80_000;
+
+/**
  * System prompt that defines the DataCleaner's role and output format.
  *
  * Instructs the model to:
@@ -138,6 +145,12 @@ export class DataCleanerAgent {
     // First try rule-based parsing for known formats
     const ruleBased = this.tryRuleBasedParsing(rawOutput, toolType);
     if (ruleBased) {
+      // Two-pass enrichment: if nmap output contains NSE script lines and a skill is loaded,
+      // run a targeted LLM call to identify specific products (pfSense, FortiGate, etc.)
+      // that the regex parser cannot detect from NSE output.
+      if (toolType.startsWith('nmap_') && this.skillContext && this.hasNSELines(rawOutput)) {
+        return this.enrichNmapServicesWithSkill(ruleBased, rawOutput);
+      }
       return ruleBased;
     }
 
@@ -156,6 +169,16 @@ export class DataCleanerAgent {
    * @returns CleanedData if parsing succeeds, null otherwise
    */
   private tryRuleBasedParsing(rawOutput: string, toolType: string): CleanedData | null {
+    // RAG tools return semantic playbook content, not tool output — pass through as-is.
+    // Never send RAG output to LLM parsing: it's already structured and can be enormous.
+    if (toolType.startsWith('rag_')) {
+      return {
+        type: 'unknown',
+        data: { raw: rawOutput },
+        summary: `RAG result (${toolType})`,
+      };
+    }
+
     if (toolType.startsWith('nmap_')) {
       return this.parseNmapOutput(rawOutput, toolType);
     }
@@ -266,10 +289,28 @@ export class DataCleanerAgent {
    * @returns CleanedData parsed by the LLM
    */
   private async llmBasedParsing(rawOutput: string, toolType: string): Promise<CleanedData> {
+    // Truncate oversized raw output to prevent exceeding the 200k token context window.
+    // rawOutput from tools like rag_query_playbooks can be enormous (200k+ tokens).
+    let truncatedOutput = rawOutput;
+    if (rawOutput.length > MAX_RAW_OUTPUT_CHARS) {
+      truncatedOutput = rawOutput.slice(0, MAX_RAW_OUTPUT_CHARS);
+      console.warn(
+        `[Data Cleaner] ⚠ rawOutput truncated: ${rawOutput.length} chars → ${MAX_RAW_OUTPUT_CHARS} chars` +
+          ` (~${Math.round(rawOutput.length / 4)} → ~${Math.round(MAX_RAW_OUTPUT_CHARS / 4)} tokens)`
+      );
+    }
+
     // Build system prompt: static base + optional skill context for advanced fingerprinting
     const systemPrompt = this.skillContext
       ? `${DATA_CLEANER_SYSTEM_PROMPT}\n\n# ADDITIONAL PARSING SKILLS & FINGERPRINTS\n${this.skillContext}\n\nRemember: Use the provided skills to identify specific technologies (like pfSense, CMS, or Middleware) hidden in the raw output.`
       : DATA_CLEANER_SYSTEM_PROMPT;
+
+    // Diagnostic logging: show estimated token sizes before the API call
+    const estSystemTokens = Math.round(systemPrompt.length / 4);
+    const estUserTokens = Math.round((`Parse this ${toolType} output into structured JSON:\n\n${truncatedOutput}`).length / 4);
+    console.log(
+      `[Data Cleaner] Prompt sizes — system: ~${estSystemTokens} tokens, user: ~${estUserTokens} tokens, total: ~${estSystemTokens + estUserTokens} tokens`
+    );
 
     const response = await this.client.messages.create({
       model: DATA_CLEANER_MODEL,
@@ -284,7 +325,7 @@ export class DataCleanerAgent {
       messages: [
         {
           role: 'user',
-          content: `Parse this ${toolType} output into structured JSON:\n\n${rawOutput}`,
+          content: `Parse this ${toolType} output into structured JSON:\n\n${truncatedOutput}`,
         },
       ],
     });
@@ -295,6 +336,120 @@ export class DataCleanerAgent {
     }
 
     return this.parseCleanedResponse(text.text, rawOutput);
+  }
+
+  /**
+   * Returns true if the nmap raw output contains NSE script lines.
+   *
+   * NSE script lines begin with "| " (pipe-space) for normal output
+   * or "|_" (pipe-underscore) for the last line of a script block.
+   *
+   * @param rawOutput - Raw nmap output text
+   */
+  private hasNSELines(rawOutput: string): boolean {
+    return /^\|[ _]/m.test(rawOutput);
+  }
+
+  /**
+   * Second-pass LLM enrichment for nmap results that contain NSE script output.
+   *
+   * Called after the regex parser has already extracted the DiscoveredService[] structure.
+   * Sends only the NSE lines + current service list to Claude Haiku with the fingerprint
+   * skill context. The LLM returns a sparse list of overrides (only changed services),
+   * which are merged back into the base result.
+   *
+   * Fails gracefully: any error returns the unmodified base result.
+   *
+   * @param baseResult - Already-parsed CleanedData from parseNmapOutput
+   * @param rawOutput  - Full raw nmap output (used to extract NSE lines)
+   */
+  private async enrichNmapServicesWithSkill(
+    baseResult: CleanedData,
+    rawOutput: string
+  ): Promise<CleanedData> {
+    if (!Array.isArray(baseResult.data)) {
+      return baseResult;
+    }
+
+    const services = baseResult.data as DiscoveredService[];
+
+    // Extract only NSE script lines (start with "| " or "|_")
+    const nseLines = rawOutput
+      .split('\n')
+      .filter((line) => /^\|/.test(line))
+      .join('\n');
+
+    // Brief summary of what the regex parser already found
+    const serviceSummary = services
+      .map((s) => `${s.host}:${s.port} (${s.service}) product=${s.product || 'unknown'}`)
+      .join('\n');
+
+    const userPrompt =
+      `You are enriching already-parsed nmap service data.\n\n` +
+      `Current services (regex-parsed):\n${serviceSummary}\n\n` +
+      `NSE script output from the same scan:\n${nseLines}\n\n` +
+      `Using the fingerprinting skills in your system prompt, identify services that should be ` +
+      `updated with a more specific product, category, or criticality.\n\n` +
+      `Return a JSON array of ONLY the services that need updating:\n` +
+      `[{ "host": "x.x.x.x", "port": 443, "product": "pfSense Firewall", ` +
+      `"category": "network-device", "criticality": "high", "confidence": 0.9 }]\n\n` +
+      `If no services need updating, return an empty array: []`;
+
+    try {
+      const response = await this.client.messages.create({
+        model: DATA_CLEANER_MODEL,
+        max_tokens: 800,
+        system: `You are a fingerprinting specialist. Apply the following skills to identify specific products from NSE script output.\n\n${this.skillContext}`,
+        messages: [{ role: 'user', content: userPrompt }],
+      });
+
+      const text = response.content[0];
+      if (text.type !== 'text') return baseResult;
+
+      const jsonMatch = text.text.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) return baseResult;
+
+      const updates = JSON.parse(jsonMatch[0]) as Array<{
+        host: string;
+        port: number;
+        product?: string;
+        category?: string;
+        criticality?: string;
+        confidence?: number;
+      }>;
+
+      if (updates.length === 0) return baseResult;
+
+      // Merge overrides by host:port key
+      const updatedServices = services.map((svc) => {
+        const update = updates.find((u) => u.host === svc.host && u.port === svc.port);
+        if (!update) return svc;
+        return {
+          ...svc,
+          product: update.product ?? svc.product,
+          category: update.category ?? svc.category,
+          criticality: update.criticality ?? svc.criticality,
+          confidence: update.confidence ?? svc.confidence,
+        };
+      });
+
+      console.log(`[Data Cleaner] ✓ NSE enrichment: ${updates.length} service(s) updated via skill`);
+      updates.forEach((u) => {
+        console.log(`[Data Cleaner]   ${u.host}:${u.port} → product=${u.product}, category=${u.category}`);
+      });
+
+      return {
+        ...baseResult,
+        data: updatedServices,
+        summary:
+          baseResult.summary +
+          ` [enriched: ${updates.map((u) => u.product).join(', ')}]`,
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[Data Cleaner] NSE enrichment failed, using base result: ${message}`);
+      return baseResult;
+    }
   }
 
   /**

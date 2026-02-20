@@ -26,15 +26,12 @@ services:
       context: ./kali
       network: host
     container_name: pentest-kali
-    ports:
-      - "3001:3001"
     volumes:
       - kali_scripts:/app/scripts
       - kali_logs:/app/logs
       - kali_apt_cache:/var/cache/apt
       - kali_apt_lib:/var/lib/apt
-    networks:
-      - pentest-net
+    network_mode: host
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1

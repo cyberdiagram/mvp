@@ -68,7 +68,8 @@ Thought Process:
 - "If I find something interesting, I'll do a full scan"
 
 Action: Quick port scan
-Command: nmap -Pn -T4 -p- --min-rate=1000 192.168.1.10
+Command: nmap -Pn -T4 --top-ports 1000 192.168.1.10
+# NEVER use -p- — scanning all 65535 ports exceeds the MCP execution timeout (120s)
 ```
 
 **IMPORTANT: Once host is confirmed up, always use -Pn in subsequent scans to:**
@@ -262,7 +263,7 @@ START: New target IP address
 │  └─ YES → Continue (use -Pn in all subsequent scans)
 │
 ├─ Q: Do I know what ports are open?
-│  ├─ NO → Quick port scan (-Pn -p- or -Pn --top-ports 1000)
+│  ├─ NO → Quick port scan (-Pn --top-ports 1000)  ← NEVER use -p-
 │  │       NOTE: Use -Pn since host is already confirmed up
 │  └─ YES → Continue
 │
@@ -560,6 +561,30 @@ nmap -Pn --script vuln -p 445 192.168.1.10 -oA scans/vulnerability/smb_vulns
 
 ## Common Mistakes to Avoid
 
+### ❌ Mistake 0: Using -p- (Full 65535-Port Scan)
+
+```bash
+# BAD: Scanning all 65535 ports
+nmap -p- 192.168.1.10
+nmap -Pn -p- -T4 192.168.1.10
+```
+
+Thought: `-p-` takes 5–20 minutes over a remote network. The MCP tool execution
+timeout is 120 seconds — the scan will be killed before it finishes, returning no results.
+
+**✅ Correct Approach:**
+
+```bash
+# Use --top-ports to cover the most common ports quickly
+nmap -Pn -T4 --top-ports 1000 192.168.1.10    # covers ~90% of real-world services
+nmap -Pn -T4 --top-ports 3000 192.168.1.10    # broader coverage if needed
+
+Thought: Top 1000 ports catches virtually all real services within the timeout window.
+Only expand to --top-ports 3000 if initial results are sparse. NEVER use -p-.
+```
+
+---
+
 ### ❌ Mistake 1: Scanning Too Broadly
 
 ```bash
@@ -711,8 +736,10 @@ nmap -Pn 192.168.1.0/24
 # Quick Port Scan (top 1000) - use -Pn since host is confirmed up
 nmap -Pn -T4 --top-ports 1000 192.168.1.10
 
-# Full Port Scan - use -Pn since host is confirmed up
-nmap -Pn -p- -T4 192.168.1.10
+# Port Scan (top 1000) — DO NOT use -p-, it will timeout. Use --top-ports instead.
+nmap -Pn -T4 --top-ports 1000 192.168.1.10
+# Broader scan if needed (still within timeout)
+nmap -Pn -T4 --top-ports 3000 192.168.1.10
 
 # Service Detection - use -Pn since host is confirmed up
 nmap -Pn -sV -sC -p 22,80,443 192.168.1.10
@@ -733,7 +760,8 @@ nmap -Pn -sU --top-ports 100 192.168.1.10
 nmap -Pn -oA scan_results 192.168.1.10
 
 # Comprehensive Scan (kitchen sink) - use -Pn since host is confirmed up
-nmap -Pn -sS -sV -sC -O -A -T4 -p- --script vuln -oA comprehensive_scan 192.168.1.10
+# NOTE: Do NOT use -p- here — use --top-ports to stay within timeout
+nmap -Pn -sS -sV -sC -O -A -T4 --top-ports 1000 --script vuln -oA comprehensive_scan 192.168.1.10
 ```
 
 ---

@@ -166,6 +166,12 @@ async function main(): Promise<void> {
             vulnerabilities: reconResult.intelligence?.vulnerabilities?.length ?? 0,
             summary: reconResult.results.map((r) => r.summary),
             completed_at: new Date().toISOString(),
+            // Full intelligence data for web frontend modules
+            target_profile: reconResult.intelligence?.targetProfile ?? null,
+            discovered_services: reconResult.discoveredServices,
+            key_findings: reconResult.intelligence?.vulnerabilities ?? [],
+            // Full tactical plan array for Phase 2 UI
+            tactical_plans_data: reconResult.tacticalPlans,
           };
 
           // Atomic update + publish
