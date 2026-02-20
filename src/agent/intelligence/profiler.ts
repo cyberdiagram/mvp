@@ -12,7 +12,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { DiscoveredService, TargetProfile } from '../core/types.js';
 
 /** Model used for profiling - Haiku for speed and cost efficiency */
-export const PROFILER_MODEL = 'claude-3-5-haiku-20241022';
+export const PROFILER_MODEL = 'claude-haiku-4-5-20251001';
 
 /** Max tokens for Profiler responses */
 export const PROFILER_MAX_TOKENS = 1500;

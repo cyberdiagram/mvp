@@ -217,6 +217,7 @@ def searchsploit_examine(edb_id: str) -> str:
             text=True,
             timeout=EXECUTION_TIMEOUT,
             cwd=SCRIPTS_DIR,
+            env={**os.environ, "PAGER": "cat"},  # prevent pager from swallowing output in non-TTY
         )
         stdout = result.stdout or ""
         stderr = result.stderr or ""

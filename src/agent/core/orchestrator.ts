@@ -268,11 +268,15 @@ export class PentestAgent {
         lastError = error as Error;
 
         if (attempt < maxRetries) {
-          const delayMs = initialDelayMs * Math.pow(2, attempt); // Exponential backoff
+          // Rate limit errors (HTTP 429) require much longer waits than transient errors
+          const isRateLimit =
+            (error as any)?.status === 429 || lastError.message?.includes('rate_limit');
+          const baseDelay = isRateLimit ? 30_000 : initialDelayMs;
+          const delayMs = baseDelay * Math.pow(2, attempt); // Exponential backoff
           this.log(
             'WARN',
             'Orchestrator',
-            `⚠ Attempt ${attempt + 1}/${maxRetries + 1} failed, retrying in ${delayMs}ms...`
+            `⚠ Attempt ${attempt + 1}/${maxRetries + 1} failed${isRateLimit ? ' [rate limit]' : ''}, retrying in ${delayMs}ms...`
           );
           await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
@@ -282,6 +286,79 @@ export class PentestAgent {
     // All retries exhausted
     this.log('ERROR', 'Orchestrator', `✗ All ${maxRetries + 1} attempts failed: ${lastError?.message}`);
     return null;
+  }
+
+  /**
+   * Writes the merged final target profile to logs/Intelligence/{sessionId}_final.json.
+   *
+   * Called once after the recon loop completes. Merges all accumulated state into
+   * a single document for the web UI:
+   * - services       — all discovered services (highest-confidence version per host:port)
+   * - target_profile — last Profiler output (has full context of all services)
+   * - vulnerabilities — union across all iterations, deduped by CVE ID
+   * - tactical_plan  — last tactical plan generated (if any)
+   *
+   * @param target             - Reconnaissance target (IP/hostname)
+   * @param services           - All discovered services (final merged state)
+   * @param intelligence       - Final IntelligenceContext (profile + vulns)
+   * @param tacticalPlans      - All tactical plans generated during the session
+   * @param totalIterations    - Number of iterations the loop ran
+   * @param totalResults       - Total number of tool results collected
+   */
+  private async _writeFinalProfile(
+    target: string,
+    services: DiscoveredService[],
+    intelligence: IntelligenceContext | null,
+    tacticalPlans: TacticalPlanObject[],
+    fileVulns: VulnerabilityInfo[],
+    totalIterations: number,
+    totalResults: number
+  ): Promise<void> {
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const intelDir = path.resolve('logs', 'Intelligence');
+      await fs.mkdir(intelDir, { recursive: true });
+
+      const finalProfile: Record<string, unknown> = {
+        session_id: this.sessionId,
+        target,
+        completed_at: new Date().toISOString(),
+        stats: {
+          total_iterations: totalIterations,
+          total_results: totalResults,
+          services_discovered: services.length,
+        },
+        services,
+      };
+
+      if (intelligence?.targetProfile) {
+        finalProfile.target_profile = intelligence.targetProfile;
+      }
+
+      // Merge VulnLookup CVEs with file-parsed vulns, deduplicated by cve_id
+      const vulnMap = new Map<string, VulnerabilityInfo>();
+      for (const v of intelligence?.vulnerabilities ?? []) vulnMap.set(v.cve_id, v);
+      for (const v of fileVulns) if (!vulnMap.has(v.cve_id)) vulnMap.set(v.cve_id, v);
+      if (vulnMap.size > 0) {
+        finalProfile.vulnerabilities = Array.from(vulnMap.values());
+      }
+
+      // Include the last tactical plan (most refined — generated with full intelligence)
+      if (tacticalPlans.length > 0) {
+        finalProfile.tactical_plan = tacticalPlans[tacticalPlans.length - 1];
+      }
+
+      const filename = `${this.sessionId}_final.json`;
+      const filepath = path.join(intelDir, filename);
+      await fs.writeFile(filepath, JSON.stringify(finalProfile, null, 2), 'utf-8');
+
+      this.log('INFO', 'Orchestrator', `✓ Final profile saved → logs/Intelligence/${filename}`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.log('WARN', 'Orchestrator', `⚠ Failed to write final profile: ${msg}`);
+    }
   }
 
   /**
@@ -412,7 +489,10 @@ export class PentestAgent {
    */
   private async _runReasoningPhase(observation: string): Promise<ReasonerOutput> {
     this.log('STEP', 'Reasoner', 'Analyzing situation...');
-    const reasoning = await this.reasoner.reason(observation);
+    const reasoning = await this.retryWithBackoff(() => this.reasoner.reason(observation));
+    if (!reasoning) {
+      throw new Error('Reasoner failed after all retries — cannot continue recon loop');
+    }
 
     this.log('STEP', 'Reasoner', `Thought: ${reasoning.thought}`);
     this.log('STEP', 'Reasoner', `Action: ${reasoning.action}`);
@@ -485,10 +565,12 @@ export class PentestAgent {
     results: CleanedData[];
     failures: Array<{ tool: string; error: string }>;
     repeatedCommands: string[];
+    fileVulns: VulnerabilityInfo[];
   }> {
     const results: CleanedData[] = [];
     const failures: Array<{ tool: string; error: string }> = [];
     const repeatedCommands: string[] = [];
+    const fileVulns: VulnerabilityInfo[] = [];
     let currentPlan = { ...plan };
 
     while (true) {
@@ -560,6 +642,23 @@ export class PentestAgent {
           }
         }
 
+        // Parse vulnerability data from agent-written analysis files
+        if (step.tool === 'write_file') {
+          const filename = ((step.arguments?.filename as string) || '').toLowerCase();
+          const content = (step.arguments?.content as string) || '';
+          if (filename.includes('vuln') && content.length > 0) {
+            const parsed = await this.dataCleaner.parseVulnerabilityReport(content);
+            if (parsed.length > 0) {
+              this.log(
+                'RESULT',
+                'Data Cleaner',
+                `✓ Extracted ${parsed.length} vulnerabilities from ${step.arguments?.filename}`
+              );
+              fileVulns.push(...parsed);
+            }
+          }
+        }
+
         results.push(cleanedData);
       } else {
         this.log('ERROR', 'MCP Agent', `✗ Execution failed: ${rawResult.error}`);
@@ -569,7 +668,7 @@ export class PentestAgent {
       currentPlan = this.executor.advancePlan(currentPlan);
     }
 
-    return { results, failures, repeatedCommands };
+    return { results, failures, repeatedCommands, fileVulns };
   }
 
   /**
@@ -947,6 +1046,7 @@ export class PentestAgent {
     let currentIntelligence: IntelligenceContext | null = null;
     let observation = `Starting reconnaissance mission on target: ${target}`;
     let allTacticalPlans: TacticalPlanObject[] = [];
+    const allFileVulns: VulnerabilityInfo[] = [];
 
     // ========================================================================
     // MAIN RECONNAISSANCE LOOP (wrapped in Langfuse trace)
@@ -1031,6 +1131,7 @@ export class PentestAgent {
         executionResults = result.results;
         executionFailures = result.failures;
         repeatedCommands = result.repeatedCommands;
+        if (result.fileVulns.length > 0) allFileVulns.push(...result.fileVulns);
         span.update({
           output: {
             results: executionResults.length,
@@ -1135,6 +1236,17 @@ export class PentestAgent {
       }
       await this.saveTacticalPlans(allTacticalPlans, target);
     }
+
+    // Write merged final profile for web UI consumption
+    await this._writeFinalProfile(
+      target,
+      allDiscoveredServices,
+      currentIntelligence,
+      allTacticalPlans,
+      allFileVulns,
+      iteration,
+      aggregatedResults.length
+    );
 
     // Print evaluation summary
     if (this.config.enableEvaluation) {

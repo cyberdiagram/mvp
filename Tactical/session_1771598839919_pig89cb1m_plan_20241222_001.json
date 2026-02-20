@@ -1,0 +1,128 @@
+{
+  "plan_id": "plan_20241222_001",
+  "target_ip": "10.129.2.87",
+  "context_hash": "pfsense_lighttpd_1435_expired_cert",
+  "attack_vectors": [
+    {
+      "vector_id": "vec_01",
+      "priority": 1,
+      "action": {
+        "tool_name": "web_vulnerability_scanner",
+        "command_template": "Test pfSense authentication bypass techniques against management interface",
+        "parameters": {
+          "target": "https://10.129.2.87:443",
+          "focus": "authentication_bypass",
+          "user_agent": "Mozilla/5.0"
+        },
+        "timeout_seconds": 60
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Authentication Bypass",
+          "mitre_id": "T1190",
+          "cve_id": "lighttpd_historical"
+        },
+        "hypothesis": {
+          "confidence_score": 0.75,
+          "rationale_tags": [
+            "lighttpd_1.4.35_outdated",
+            "expired_certificate",
+            "weak_security_posture"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "content_analysis",
+          "match_pattern": "(dashboard|admin|logged|authenticated)",
+          "negative_pattern": "(login|authentication|password)"
+        }
+      }
+    },
+    {
+      "vector_id": "vec_02",
+      "priority": 2,
+      "action": {
+        "tool_name": "directory_traversal_scanner",
+        "command_template": "Test directory traversal attacks against pfSense web interface",
+        "parameters": {
+          "target": "https://10.129.2.87:443",
+          "method": "path_traversal",
+          "payloads": [
+            "../../../etc/passwd",
+            "....//....//....//etc/passwd"
+          ]
+        },
+        "timeout_seconds": 45
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Directory Traversal",
+          "mitre_id": "T1083",
+          "cve_id": "path_traversal_generic"
+        },
+        "hypothesis": {
+          "confidence_score": 0.7,
+          "rationale_tags": [
+            "lighttpd_historical_vulns",
+            "freebsd_filesystem",
+            "outdated_software"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(root:|daemon:|bin:|sys:|nobody:)",
+          "negative_pattern": "(404|403|denied|blocked)"
+        }
+      }
+    },
+    {
+      "vector_id": "vec_03",
+      "priority": 3,
+      "action": {
+        "tool_name": "default_credential_tester",
+        "command_template": "Test default and common credentials against pfSense login",
+        "parameters": {
+          "target": "https://10.129.2.87:443",
+          "credentials": [
+            {
+              "username": "admin",
+              "password": "pfsense"
+            },
+            {
+              "username": "admin",
+              "password": "admin"
+            },
+            {
+              "username": "root",
+              "password": "pfsense"
+            }
+          ]
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Credential Attack",
+          "mitre_id": "T1110.001",
+          "cve_id": "default_credentials"
+        },
+        "hypothesis": {
+          "confidence_score": 0.6,
+          "rationale_tags": [
+            "weak_security_posture",
+            "network_appliance",
+            "default_config"
+          ],
+          "expected_success": false
+        },
+        "success_criteria": {
+          "match_type": "http_status",
+          "match_pattern": "(200|302|dashboard)",
+          "negative_pattern": "(401|403|invalid|failed)"
+        }
+      }
+    }
+  ],
+  "created_at": "2024-12-22T10:30:00Z"
+}

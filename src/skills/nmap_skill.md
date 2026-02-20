@@ -69,7 +69,7 @@ Thought Process:
 
 Action: Quick port scan
 Command: nmap -Pn -T4 --top-ports 1000 192.168.1.10
-# NEVER use -p- — scanning all 65535 ports exceeds the MCP execution timeout (120s)
+# NEVER use -p-, -p 1-65535, or -p 0-65535 — all are identical and exceed the 120s MCP timeout
 ```
 
 **IMPORTANT: Once host is confirmed up, always use -Pn in subsequent scans to:**
@@ -263,7 +263,7 @@ START: New target IP address
 │  └─ YES → Continue (use -Pn in all subsequent scans)
 │
 ├─ Q: Do I know what ports are open?
-│  ├─ NO → Quick port scan (-Pn --top-ports 1000)  ← NEVER use -p-
+│  ├─ NO → Quick port scan (-Pn --top-ports 1000)  ← NEVER use -p-, -p 1-65535, or -p 0-65535
 │  │       NOTE: Use -Pn since host is already confirmed up
 │  └─ YES → Continue
 │
@@ -561,16 +561,26 @@ nmap -Pn --script vuln -p 445 192.168.1.10 -oA scans/vulnerability/smb_vulns
 
 ## Common Mistakes to Avoid
 
-### ❌ Mistake 0: Using -p- (Full 65535-Port Scan)
+### ❌ Mistake 0: Scanning All 65535 Ports (ANY form)
+
+> **HARD RULE — NO EXCEPTIONS**: Any nmap command that scans all or nearly all ports
+> WILL be killed by the 120-second MCP execution timeout before a single result is returned.
+> This applies to EVERY form of full-port specification:
 
 ```bash
-# BAD: Scanning all 65535 ports
-nmap -p- 192.168.1.10
-nmap -Pn -p- -T4 192.168.1.10
+# ALL OF THESE ARE FORBIDDEN:
+nmap -p- 192.168.1.10              # shorthand for all ports
+nmap -Pn -p- -T4 192.168.1.10     # still forbidden with flags
+nmap -Pn -p 1-65535 192.168.1.10  # explicit range — SAME as -p-, still forbidden
+nmap -Pn -p 0-65535 192.168.1.10  # zero-based — SAME as -p-, still forbidden
+nmap -sS -p 1-65535 --max-rate 5000 192.168.1.10  # rate-limiting does NOT help within 120s
 ```
 
-Thought: `-p-` takes 5–20 minutes over a remote network. The MCP tool execution
-timeout is 120 seconds — the scan will be killed before it finishes, returning no results.
+Thought: Whether written as `-p-`, `-p 1-65535`, or `-p 0-65535`, they all instruct nmap
+to probe every one of the 65535 ports. Over a remote network this takes 5–20+ minutes
+even with `--max-rate`. The MCP execution timeout is a hard 120-second wall — the process
+is killed and you get zero results. Rate-limiting flags like `--max-rate` do not fix this;
+they only make it slower.
 
 **✅ Correct Approach:**
 
@@ -580,7 +590,8 @@ nmap -Pn -T4 --top-ports 1000 192.168.1.10    # covers ~90% of real-world servic
 nmap -Pn -T4 --top-ports 3000 192.168.1.10    # broader coverage if needed
 
 Thought: Top 1000 ports catches virtually all real services within the timeout window.
-Only expand to --top-ports 3000 if initial results are sparse. NEVER use -p-.
+Only expand to --top-ports 3000 if initial results are sparse.
+NEVER use -p-, -p 1-65535, or -p 0-65535 — all are equivalent and all will timeout.
 ```
 
 ---
@@ -736,7 +747,7 @@ nmap -Pn 192.168.1.0/24
 # Quick Port Scan (top 1000) - use -Pn since host is confirmed up
 nmap -Pn -T4 --top-ports 1000 192.168.1.10
 
-# Port Scan (top 1000) — DO NOT use -p-, it will timeout. Use --top-ports instead.
+# Port Scan (top 1000) — DO NOT use -p-, -p 1-65535, or -p 0-65535. Use --top-ports instead.
 nmap -Pn -T4 --top-ports 1000 192.168.1.10
 # Broader scan if needed (still within timeout)
 nmap -Pn -T4 --top-ports 3000 192.168.1.10

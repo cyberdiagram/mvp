@@ -10,7 +10,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { CleanedData, NmapScanResult, DiscoveredService, NmapPortResult } from '../core/types.js';
+import { CleanedData, NmapScanResult, DiscoveredService, NmapPortResult, VulnerabilityInfo } from '../core/types.js';
 
 /** Model used for data parsing - Haiku for speed and cost efficiency */
 export const DATA_CLEANER_MODEL = 'claude-haiku-4-5-20251001';
@@ -85,6 +85,38 @@ Always respond with valid JSON:
 - Normalize data formats
 - Remove noise (banners, ASCII art, progress indicators)
 - If parsing fails, return type "unknown" with raw data in a "raw" field`;
+
+/**
+ * Retry helper for DataCleaner LLM calls.
+ *
+ * Handles transient errors and rate limits (HTTP 429) with exponential backoff.
+ * Rate limit errors use a 30-second base delay; other errors use 1-second base.
+ *
+ * @param fn          - Async function to retry
+ * @param maxRetries  - Maximum number of additional attempts (default: 2)
+ */
+async function retryLLMCall<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxRetries) {
+        const isRateLimit =
+          (error as any)?.status === 429 ||
+          (error instanceof Error && error.message.includes('rate_limit'));
+        const baseDelay = isRateLimit ? 30_000 : 1_000;
+        const delayMs = baseDelay * Math.pow(2, attempt);
+        console.warn(
+          `[Data Cleaner] ⚠ Attempt ${attempt + 1}/${maxRetries + 1} failed${isRateLimit ? ' [rate limit]' : ''}, retrying in ${delayMs}ms...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError;
+}
 
 /**
  * DataCleanerAgent - Transforms raw tool output into structured data.
@@ -316,23 +348,25 @@ export class DataCleanerAgent {
       `[Data Cleaner] Prompt sizes — system: ~${estSystemTokens} tokens, user: ~${estUserTokens} tokens, total: ~${estSystemTokens + estUserTokens} tokens`
     );
 
-    const response = await this.client.messages.create({
-      model: DATA_CLEANER_MODEL,
-      max_tokens: DATA_CLEANER_MAX_TOKENS,
-      system: [
-        {
-          type: 'text',
-          text: systemPrompt,
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
-      messages: [
-        {
-          role: 'user',
-          content: `Parse this ${toolType} output into structured JSON:\n\n${truncatedOutput}`,
-        },
-      ],
-    });
+    const response = await retryLLMCall(() =>
+      this.client.messages.create({
+        model: DATA_CLEANER_MODEL,
+        max_tokens: DATA_CLEANER_MAX_TOKENS,
+        system: [
+          {
+            type: 'text',
+            text: systemPrompt,
+            cache_control: { type: 'ephemeral' },
+          },
+        ],
+        messages: [
+          {
+            role: 'user',
+            content: `Parse this ${toolType} output into structured JSON:\n\n${truncatedOutput}`,
+          },
+        ],
+      })
+    );
 
     const text = response.content[0];
     if (text.type !== 'text') {
@@ -400,12 +434,14 @@ export class DataCleanerAgent {
       `If no services need updating, return an empty array: []`;
 
     try {
-      const response = await this.client.messages.create({
-        model: DATA_CLEANER_MODEL,
-        max_tokens: 800,
-        system: `You are a fingerprinting specialist. Apply the following skills to identify specific products from NSE script output.\n\n${this.skillContext}`,
-        messages: [{ role: 'user', content: userPrompt }],
-      });
+      const response = await retryLLMCall(() =>
+        this.client.messages.create({
+          model: DATA_CLEANER_MODEL,
+          max_tokens: 800,
+          system: `You are a fingerprinting specialist. Apply the following skills to identify specific products from NSE script output.\n\n${this.skillContext}`,
+          messages: [{ role: 'user', content: userPrompt }],
+        })
+      );
 
       const text = response.content[0];
       if (text.type !== 'text') return baseResult;
@@ -629,5 +665,62 @@ export class DataCleanerAgent {
       data: { raw: rawOutput },
       summary: 'Could not parse output',
     };
+  }
+
+  /**
+   * Parses agent-written vulnerability analysis markdown into VulnerabilityInfo[].
+   *
+   * Called when the agent writes a file whose name contains "vuln" (e.g.,
+   * vulnerability_analysis.md). Extracts structured CVE/exploit data from the
+   * markdown so it can be included in the session's final intelligence profile.
+   *
+   * Returns an empty array (never throws) so a parse failure never breaks the loop.
+   *
+   * @param content - Full text content of the vulnerability analysis file
+   * @returns Array of structured VulnerabilityInfo entries, or [] on failure
+   */
+  async parseVulnerabilityReport(content: string): Promise<VulnerabilityInfo[]> {
+    const systemPrompt = `You are a vulnerability data extractor.
+Extract every vulnerability mentioned in the provided security analysis document.
+
+Return a JSON array. Each entry must follow this exact schema:
+{
+  "cve_id": "CVE-XXXX-XXXXX or EDB-XXXXX or a short descriptive id if no CVE exists",
+  "severity": "critical | high | medium | low",
+  "description": "one-sentence description of the vulnerability",
+  "affected_service": "service name and version (e.g. pfSense < 2.1.4)",
+  "poc_available": true | false,
+  "exploitdb_id": "optional EDB ID number as a string",
+  "poc_url": "optional URL or file path to PoC"
+}
+
+Rules:
+- Only include real vulnerabilities with an identifier (CVE, EDB, or named vuln).
+- Do NOT invent CVEs. If the document mentions no specific CVE, use a descriptive id like "pfSense-RRD-cmdinject".
+- If no vulnerabilities are found, return [].
+- Respond with ONLY the JSON array — no markdown, no explanation.`;
+
+    try {
+      const truncated = content.slice(0, 12_000);
+      const response = await retryLLMCall(() =>
+        this.client.messages.create({
+          model: DATA_CLEANER_MODEL,
+          max_tokens: 1000,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: `Extract vulnerabilities:\n\n${truncated}` }],
+        })
+      );
+
+      const text = response.content[0];
+      if (text.type !== 'text') return [];
+
+      const jsonMatch = text.text.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) return [];
+
+      const parsed = JSON.parse(jsonMatch[0]) as VulnerabilityInfo[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   }
 }
