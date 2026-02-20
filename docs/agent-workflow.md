@@ -64,11 +64,63 @@ This document illustrates the full workflow of the MVP Pentest Agent, from initi
         └───────────────┬───────────────────┘                                  │
                         │                                                       │
                         ▼                                                       │
+        ┌───────────────────────────────────┐                                  │
+        │  GENERATE TACTICAL PLAN           │                                  │
+        │                                   │                                  │
+        │  if (reasoning.tactical_plan) {   │                                  │
+        │    allTacticalPlans.push(plan)    │                                  │
+        │  }                                │                                  │
+        │                                   │                                  │
+        │  Conditions met when:             │                                  │
+        │  ✓ Intel context set (Phase 4     │                                  │
+        │    has run at least once)         │                                  │
+        │  ✓ CVEs found (vulns.length > 0)  │                                  │
+        │  ✓ Services have product+version  │                                  │
+        │  ✓ RAG playbooks injected         │                                  │
+        │    (boosts quality, optional)     │                                  │
+        │                                   │                                  │
+        │  tactical_plan structure:         │                                  │
+        │  { plan_id, target_ip,            │                                  │
+        │    attack_vectors[] {             │                                  │
+        │      priority, action {           │                                  │
+        │        tool_name,                 │                                  │
+        │        command_template,          │                                  │
+        │        parameters },              │                                  │
+        │      prediction_metrics {         │                                  │
+        │        classification,            │                                  │
+        │        hypothesis,                │                                  │
+        │        success_criteria },        │                                  │
+        │      rag_context {                │                                  │
+        │        payload_snippet,           │                                  │
+        │        insight,                   │                                  │
+        │        exploitation_logic }       │                                  │
+        │    }, created_at }                │                                  │
+        └───────────────┬───────────────────┘                                  │
+                        │                                                       │
+                        ▼                                                       │
               ┌─────────────────┐                                               │
               │ is_complete?    │                                               │
-              │ true ──────────►│──────────────────────────────────────────► EXIT LOOP
-              │ false ──────────┘                                              │
-              └────────┬────────┘                                              │
+              │ true ──────────►│─────────────────────────────────────────────►┤
+              │ false ──────────┘                                              ││
+              └────────┬────────┘                           EXIT LOOP          ││
+                       │                              (is_complete OR          ││
+                       │                               maxIterations=15)       ││
+                       │                                                       ││
+                       │                    ┌──────────────────────────────────┘│
+                       │                    │                                   │
+                       │                    ▼                                   │
+                       │    ┌───────────────────────────────────┐              │
+                       │    │  POST-LOOP: Save Tactical Plans   │              │
+                       │    │                                   │              │
+                       │    │  if (allTacticalPlans.length > 0) │              │
+                       │    │    displayTacticalPlan(plan)       │              │
+                       │    │    saveTacticalPlans(plans,target) │              │
+                       │    │    → Tactical/<sessionId>_         │              │
+                       │    │        <plan_id>.json              │              │
+                       │    │                                   │              │
+                       │    │  Used by: plan <json-file> CLI    │              │
+                       │    │  → 4 AgenticExecutor strategies   │              │
+                       │    └───────────────────────────────────┘              │
                        │                                                        │
                        ▼                                                        │
         ┌───────────────────────────────────────────────────────┐              │
