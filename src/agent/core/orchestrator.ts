@@ -309,6 +309,7 @@ export class PentestAgent {
     vulnerabilities: VulnerabilityInfo[],
     playbooks: RAGMemoryDocument[]
   ): Promise<void> {
+    this.log('INFO', 'Intelligence', `[iter ${iteration}] _logIntelligenceRecord called — services=${newServices.length} profile=${!!profile} vulns=${vulnerabilities.length} playbooks=${playbooks.length}`);
     try {
       const fs = await import('fs/promises');
       const path = await import('path');
@@ -601,8 +602,11 @@ export class PentestAgent {
     currentIntelligence: IntelligenceContext | null,
     iteration: number
   ): Promise<IntelligenceContext | null> {
+    this.log('INFO', 'Intelligence', `[iter ${iteration}] allDiscoveredServices=${allDiscoveredServices.length}`);
+
     // Skip if no services discovered
     if (allDiscoveredServices.length === 0) {
+      this.log('INFO', 'Intelligence', `[iter ${iteration}] skip — no services discovered yet`);
       return currentIntelligence;
     }
 
@@ -612,8 +616,11 @@ export class PentestAgent {
       return !this.analyzedServiceFingerprints.has(fingerprint);
     });
 
+    this.log('INFO', 'Intelligence', `[iter ${iteration}] newServices=${newServices.length}, alreadyAnalyzed=${allDiscoveredServices.length - newServices.length}`);
+
     // Skip if no new services (all already analyzed)
     if (newServices.length === 0) {
+      this.log('INFO', 'Intelligence', `[iter ${iteration}] skip — all services already analyzed`);
       return currentIntelligence;
     }
 

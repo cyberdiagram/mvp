@@ -148,7 +148,8 @@ export class DataCleanerAgent {
       // Two-pass enrichment: if nmap output contains NSE script lines and a skill is loaded,
       // run a targeted LLM call to identify specific products (pfSense, FortiGate, etc.)
       // that the regex parser cannot detect from NSE output.
-      if (toolType.startsWith('nmap_') && this.skillContext && this.hasNSELines(rawOutput)) {
+      const isNmapOutput = toolType.startsWith('nmap_') || rawOutput.includes('Nmap scan report for');
+      if (isNmapOutput && this.skillContext && this.hasNSELines(rawOutput)) {
         return this.enrichNmapServicesWithSkill(ruleBased, rawOutput);
       }
       return ruleBased;
@@ -179,7 +180,10 @@ export class DataCleanerAgent {
       };
     }
 
-    if (toolType.startsWith('nmap_')) {
+    // Route to nmap parser when the tool is a named nmap tool OR when nmap output
+    // is detected inside execute_shell_cmd output (the common case in this system).
+    const isNmapOutput = toolType.startsWith('nmap_') || rawOutput.includes('Nmap scan report for');
+    if (isNmapOutput) {
       return this.parseNmapOutput(rawOutput, toolType);
     }
     return null;
