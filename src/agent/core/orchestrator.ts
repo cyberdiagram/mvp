@@ -1,7 +1,7 @@
 // Main Orchestrator - Coordinates all subagents
 
 import { ReasonerAgent, ProfilerAgent, EvaluatorAgent } from '../intelligence/index.js';
-import { VulnLookupAgent, RAGMemoryAgent } from '../knowledge/index.js';
+import { VulnLookupAgent, RAGMemoryAgent, RAGMemoryDocument } from '../knowledge/index.js';
 import { ExecutorAgent, DualMCPAgent, AgenticExecutor, DataCleanerAgent } from '../execution/index.js';
 import { SkillManager } from '../utils/skill-manager.js';
 import {
@@ -284,6 +284,76 @@ export class PentestAgent {
     return null;
   }
 
+  /**
+   * Writes a Phase 4 intelligence record to logs/Intelligence/.
+   *
+   * Only records fields that contain valid data:
+   * - target_profile  — omitted when null
+   * - vulnerabilities — omitted when empty
+   * - rag_playbooks   — omitted when empty
+   *
+   * Each iteration produces one file:
+   *   logs/Intelligence/<sessionId>_iter<NN>.json
+   *
+   * @param iteration      - Current loop iteration number
+   * @param profile        - Profiler result (null if failed/no data)
+   * @param vulnerabilities - VulnLookup results (may be empty)
+   * @param playbooks      - RAG searchHandbook results (may be empty)
+   */
+  private async _logIntelligenceRecord(
+    iteration: number,
+    profile: TargetProfile | null,
+    vulnerabilities: VulnerabilityInfo[],
+    playbooks: RAGMemoryDocument[]
+  ): Promise<void> {
+    if (!profile && vulnerabilities.length === 0 && playbooks.length === 0) {
+      return; // Nothing valid to log
+    }
+
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const intelDir = path.resolve('logs', 'Intelligence');
+      await fs.mkdir(intelDir, { recursive: true });
+
+      const record: Record<string, unknown> = {
+        session_id: this.sessionId,
+        iteration,
+        timestamp: new Date().toISOString(),
+      };
+
+      if (profile) {
+        record.target_profile = profile;
+      }
+
+      if (vulnerabilities.length > 0) {
+        record.vulnerabilities = vulnerabilities;
+      }
+
+      if (playbooks.length > 0) {
+        record.rag_playbooks = playbooks.map((p) => ({
+          id: p.id,
+          type: p.metadata.type,
+          service: p.metadata.service,
+          category: p.metadata.category,
+          tags: p.metadata.tags,
+          source: p.metadata.source,
+          document: p.document,
+        }));
+      }
+
+      const filename = `${this.sessionId}_iter${String(iteration).padStart(2, '0')}.json`;
+      const filepath = path.join(intelDir, filename);
+      await fs.writeFile(filepath, JSON.stringify(record, null, 2), 'utf-8');
+
+      this.log('INFO', 'Intelligence', `✓ Logged intelligence record → logs/Intelligence/${filename}`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.log('WARN', 'Intelligence', `⚠ Failed to log intelligence record: ${msg}`);
+    }
+  }
+
   // ============================================================================
   // PRIVATE HELPER METHODS - Reconnaissance Loop Phases
   // ============================================================================
@@ -528,7 +598,8 @@ export class PentestAgent {
    */
   private async _runIntelligencePhase(
     allDiscoveredServices: DiscoveredService[],
-    currentIntelligence: IntelligenceContext | null
+    currentIntelligence: IntelligenceContext | null,
+    iteration: number
   ): Promise<IntelligenceContext | null> {
     // Skip if no services discovered
     if (allDiscoveredServices.length === 0) {
@@ -641,7 +712,10 @@ export class PentestAgent {
     this.log('RESULT', 'Intelligence', '✓ Intelligence context updated in Reasoner');
 
     // RAG Memory Recall (Playbooks + Anti-Patterns) - always run for new services
-    await this._runRAGMemoryForIntelligence(newServices, validNewVulns, newTargetProfile);
+    const ragPlaybooks = await this._runRAGMemoryForIntelligence(newServices, validNewVulns, newTargetProfile);
+
+    // Log this iteration's intelligence data to logs/Intelligence/
+    await this._logIntelligenceRecord(iteration, newTargetProfile, validNewVulns, ragPlaybooks);
 
     return intelligence;
   }
@@ -667,8 +741,8 @@ export class PentestAgent {
     services: DiscoveredService[],
     vulnerabilities: VulnerabilityInfo[],
     profile: TargetProfile | null
-  ): Promise<void> {
-    if (!this.ragMemory) return;
+  ): Promise<RAGMemoryDocument[]> {
+    if (!this.ragMemory) return [];
 
     this.log('INFO', 'RAG Memory', 'Phase 4b: Searching attack playbooks...');
 
@@ -686,9 +760,12 @@ export class PentestAgent {
         this.log('INFO', 'RAG Memory', `✓ Injected ${playbooks.length} attack playbook(s)`);
         this.reasoner.injectMemoryContext(formattedText);
       }
+
+      return playbooks;
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       this.log('WARN', 'RAG Memory', `⚠ Failed (continuing without memory): ${errorMsg}`);
+      return [];
     }
   }
 
@@ -963,7 +1040,8 @@ export class PentestAgent {
       await startActiveObservation('phase4-intelligence', async (span) => {
         currentIntelligence = await this._runIntelligencePhase(
           allDiscoveredServices,
-          currentIntelligence
+          currentIntelligence,
+          iteration
         );
         span.update({
           output: {
