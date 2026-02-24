@@ -4,6 +4,47 @@ All notable changes to this project are documented in this file.
 
 ---
 
+### 2026-02-24 - Cassette Replay Workflow & Real-Time Frontend Fixes (v3.3)
+
+**`--task-id` Support for Cassette Replay:**
+- **REST API** (`cyber-bridge/src/routes/tasks.ts`): Added optional `task_id` field to `CreateTaskBody`. When provided, the API uses it instead of generating a new UUID — allows the worker to find the original cassette file by its recorded UUID.
+- **WebSocket handler** (`cyber-bridge/src/ws/handler.ts`): Same `task_id` support for `task:create` events.
+- **`create-task.sh`** (`cyber-bridge/scripts/create-task.sh`): Added `--task-id <uuid>` flag and `-e`/`--env` flag (`prod` | `replay`). Replay mode requires `--task-id` for recon phase. Displays `env` in output banners.
+
+**`replay-task.sh` — Automated Cleanup & Replay Script:**
+- New `cyber-bridge/scripts/replay-task.sh` automates the replay workflow:
+  1. Loads Supabase credentials from `cyber-bridge/.env` or `~/supabase.env`
+  2. Checks if the task ID already exists in Supabase
+  3. Deletes all related rows across 7 tables (children first): `execution_results`, `task_logs`, `target_profiles`, `discovered_services`, `vulnerabilities`, `tactical_plans`, `tasks`
+  4. For exec replays: discovers and cleans up previous exec tasks under the same session
+  5. Resets `scan_sessions.status` to `"running"` so the frontend re-subscribes to live events
+  6. Delegates to `create-task.sh` with `-e replay`
+
+**Frontend Real-Time Updates for REST-Created Tasks:**
+- **Root cause**: `create-task.sh` creates tasks via REST API, but the REST path (`watchTaskCompletion`) only wrote to Supabase — it never emitted Socket.io events. The frontend relies entirely on Socket.io for real-time updates.
+- **New `cyber-bridge/src/io.ts`**: Singleton holder for the Socket.io server instance (`setIO()`/`getIO()`).
+- **`cyber-bridge/src/index.ts`**: Calls `setIO(io)` after creating the Socket.io server.
+- **`cyber-bridge/src/routes/tasks.ts`**: REST path now broadcasts three Socket.io events via `io.to(\`tenant:${tenantId}\`).emit(...)`:
+  - `task:created` — when a REST task is created
+  - `task:log` — for each log line during execution
+  - `task:complete` — when the worker finishes
+
+**Session Status Reset for Historical Workspace:**
+- The frontend checks `scan_sessions.status` when loading `/workspace?session=...`. If `"completed"`, it shows static data with no socket subscription. `replay-task.sh` now resets the session to `"running"` before creating the replay task, so the frontend calls `resumeTask()` and subscribes to live events.
+
+**Persisted Log Format Fix — Missing AI Thoughts:**
+- **Root cause**: The worker logs `[thought]` lines with level `'INFO'`, `[action]` with `'STEP'`, and `[result]` with `'RESULT'`. The bridge wraps these as `[INFO][AgenticExecutor] [thought] ...`. The `[TYPE][AGENT]` regex matched first and set `msg_type: "INFO"`. Since only `"STEP"` and `"RESULT"` entries were collected into `interleavedLogs`, `[thought]` lines were lost from `execution_results.thought_stream`.
+- **Fix** (`cyber-bridge/src/routes/tasks.ts` and `cyber-bridge/src/ws/handler.ts`): After the `[TYPE][AGENT]` regex matches, reclassify `msg_type` based on inner content — `[thought]`/`[action]`/`[tokens]` → `"STEP"`, `[result]` → `"RESULT"`.
+
+**Persisted Log Format Fix — Duplicate Results:**
+- **Root cause**: `execution_results.thought_stream` stored the full interleaved stream (thoughts + actions + results). `terminal_log` stored a RESULT-only subset. The frontend concatenated them: `[...thought_stream, ...terminal_log]`, duplicating every result line.
+- **Fix** (`web-cybersecurity-diagram/app/(dashboard)/workspace/page.tsx`): Use `thought_stream` alone since it already contains the complete interleaved log. Fall back to `terminal_log` only for legacy data where `thought_stream` is empty.
+
+**Documentation:**
+- Updated `mvp/docs/record-and-relay.md` with `--task-id` and `-e` flag usage, concrete replay examples, and session status reset behavior.
+
+---
+
 ### 2026-02-15 - Engine Worker & Cyber-Bridge Integration (v3.2)
 
 **Engine Worker (`src/worker.ts`):**

@@ -8,12 +8,13 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { ReasonerOutput, IntelligenceContext, TacticalPlanObject } from '../core/types.js';
+import { createAnthropicClient } from '../utils/llm-recorder.js';
 
 /** Model used for strategic reasoning - Sonnet for best decision quality */
 export const REASONER_MODEL = 'claude-sonnet-4-20250514';
 
 /** Max tokens for Reasoner responses - enough for detailed analysis */
-export const REASONER_MAX_TOKENS = 2000;
+export const REASONER_MAX_TOKENS = 4000;
 
 /**
  * System prompt that defines the Reasoner's role and behavior.
@@ -78,7 +79,7 @@ Use this intelligence to:
 
 # Tactical Planning Output (When Relevant)
 
-When planning attacks after service discovery, you MAY optionally include a "tactical_plan" in your response:
+When setting is_complete=true and services have been discovered, you MUST include a "tactical_plan" in your response:
 
 {
   "thought": "...",
@@ -134,7 +135,7 @@ When planning attacks after service discovery, you MAY optionally include a "tac
   }
 }
 
-**Important**: Only include tactical_plan when you have specific attack vectors to execute based on discovered vulnerabilities. For reconnaissance phases (host discovery, port scanning, service detection), omit tactical_plan and just use the standard response format.
+**Important**: When setting is_complete=true and services are known, you MUST include a tactical_plan. If no CVEs were found, use general attack vectors based on the detected service type, version, and platform (e.g., authentication bypass, default credentials, known misconfigurations). Only omit tactical_plan during intermediate recon iterations when is_complete=false.
 
 # RAG Knowledge Integration
 
@@ -181,8 +182,10 @@ export class ReasonerAgent {
   private skillContext: string = '';
   /** Intelligence context for informed decision-making */
   private intelligenceContext: IntelligenceContext | null = null;
-  /** RAG memory context for anti-pattern warnings */
-  private memoryContext: string = '';
+  /** RAG memory context: anti-pattern warnings from Phase 0 */
+  private antiPatternContext: string = '';
+  /** RAG memory context: attack playbooks from Phase 4b */
+  private playbookContext: string = '';
 
   /**
    * Creates a new ReasonerAgent.
@@ -190,7 +193,7 @@ export class ReasonerAgent {
    * @param apiKey - Anthropic API key for Claude API calls
    */
   constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey });
+    this.client = createAnthropicClient(apiKey);
   }
 
   /**
@@ -219,15 +222,27 @@ export class ReasonerAgent {
   }
 
   /**
-   * Injects RAG memory context (anti-pattern warnings).
+   * Phase 0 — anti-pattern warnings. Never overwritten by Phase 4b.
    *
    * Memory context contains warnings from past failures to prevent
    * repeating mistakes across sessions.
    *
    * @param memoryRecall - Formatted memory warnings from RAG MCP server
    */
-  injectMemoryContext(memoryRecall: string): void {
-    this.memoryContext = memoryRecall;
+  injectAntiPatternContext(memoryRecall: string): void {
+    this.antiPatternContext = memoryRecall;
+  }
+
+  /**
+   * Phase 4b — attack playbooks. Never overwritten by Phase 0.
+   *
+   * Playbook context contains successful attack strategies retrieved
+   * from the RAG handbook to guide tactical planning.
+   *
+   * @param playbookRecall - Formatted playbook content from RAG MCP server
+   */
+  injectPlaybookContext(playbookRecall: string): void {
+    this.playbookContext = playbookRecall;
   }
 
   /**
@@ -249,10 +264,20 @@ export class ReasonerAgent {
       ? `${observation}\n\nAdditional context: ${additionalContext}`
       : observation;
 
-    this.conversationHistory.push({
-      role: 'user',
-      content: userMessage,
-    });
+    // Build the candidate history for this call WITHOUT committing to
+    // this.conversationHistory yet. Pushing before the API call means every
+    // retry attempt (on rate-limit or token-limit errors) appends another copy
+    // of the same user message, growing the prompt larger on each retry and
+    // making the situation progressively worse. We commit only on success.
+    const MAX_HISTORY_MESSAGES = 6;
+    const pendingHistory: Anthropic.MessageParam[] = [
+      ...this.conversationHistory,
+      { role: 'user', content: userMessage },
+    ];
+    const historyToSend =
+      pendingHistory.length > MAX_HISTORY_MESSAGES
+        ? pendingHistory.slice(-MAX_HISTORY_MESSAGES)
+        : pendingHistory;
 
     // Build system prompt with cache_control for token optimization
     // Caches static content (base prompt + skills) to reduce token usage by ~85%
@@ -359,30 +384,72 @@ export class ReasonerAgent {
       });
     }
 
-    // Add RAG memory context if available (warnings from past failures)
-    if (this.memoryContext) {
+    // Add anti-pattern context if available (warnings from past failures)
+    if (this.antiPatternContext) {
       systemBlocks.push({
         type: 'text',
-        text: this.memoryContext,
+        text: this.antiPatternContext,
       });
     }
+
+    // Add playbook context if available (attack strategies from Phase 4b)
+    if (this.playbookContext) {
+      systemBlocks.push({
+        type: 'text',
+        text: this.playbookContext,
+      });
+    }
+
+    // ── Token budget diagnostics ─────────────────────────────────────────────
+    // Rough char→token ratio is ~4 chars/token (conservative estimate).
+    const systemCharCounts = systemBlocks.map((b, i) => {
+      const chars = b.text.length;
+      const label =
+        i === 0 ? 'base_prompt'
+        : i === 1 ? 'skill_context'
+        : i === 2 ? 'intel_context'
+        : i === 3 ? 'anti_pattern'
+        : `block_${i}`;
+      return `${label}=${chars}ch(~${Math.round(chars / 4)}tk)`;
+    });
+    const historyChars = historyToSend.reduce(
+      (sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0),
+      0
+    );
+    console.log(
+      `[Reasoner][tokens] system blocks: ${systemCharCounts.join(' | ')} ` +
+      `| history: ${historyToSend.length} msgs ${historyChars}ch(~${Math.round(historyChars / 4)}tk) ` +
+      `| total_stored_history: ${this.conversationHistory.length} msgs`
+    );
+    // ─────────────────────────────────────────────────────────────────────────
 
     const response = await this.client.messages.create({
       model: REASONER_MODEL,
       max_tokens: REASONER_MAX_TOKENS,
       system: systemBlocks,
-      messages: this.conversationHistory,
+      messages: historyToSend,
     });
+
+    // ── Actual token usage from API response ─────────────────────────────────
+    const u = response.usage as any;
+    console.log(
+      `[Reasoner][tokens] API usage — ` +
+      `input=${u.input_tokens ?? '?'} ` +
+      `cache_read=${u.cache_read_input_tokens ?? 0} ` +
+      `cache_write=${u.cache_creation_input_tokens ?? 0} ` +
+      `output=${u.output_tokens ?? '?'} ` +
+      `| effective_input=${(u.input_tokens ?? 0) + Math.round((u.cache_read_input_tokens ?? 0) * 0.1)}`
+    );
+    // ─────────────────────────────────────────────────────────────────────────
 
     const assistantMessage = response.content[0];
     if (assistantMessage.type !== 'text') {
       throw new Error('Expected text response from Reasoner');
     }
 
-    this.conversationHistory.push({
-      role: 'assistant',
-      content: assistantMessage.text,
-    });
+    // API call succeeded — now commit both turns to the permanent history.
+    this.conversationHistory.push({ role: 'user', content: userMessage });
+    this.conversationHistory.push({ role: 'assistant', content: assistantMessage.text });
 
     return this.parseResponse(assistantMessage.text);
   }
@@ -494,6 +561,7 @@ export class ReasonerAgent {
   reset(): void {
     this.conversationHistory = [];
     this.intelligenceContext = null;
-    this.memoryContext = '';
+    this.antiPatternContext = '';
+    this.playbookContext = '';
   }
 }

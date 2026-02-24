@@ -20,6 +20,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { createAnthropicClient } from '../utils/llm-recorder.js';
 import { startActiveObservation, propagateAttributes } from '@langfuse/tracing';
 import { DualMCPAgent } from './mcp-agent.js';
 import { SkillManager } from '../utils/skill-manager.js';
@@ -152,7 +153,7 @@ export class AgenticExecutor {
     if (!apiKey) {
       throw new Error('ANTHROPIC_API_KEY is not set. Check your .env file.');
     }
-    this.anthropic = new Anthropic({ apiKey });
+    this.anthropic = createAnthropicClient(apiKey);
     this.mcpAgent = mcpAgent;
     this.skillManager = skillManager;
     this.model = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
@@ -867,6 +868,9 @@ ${planContext}
                   const textBlock = response.content.find((b) => b.type === 'text');
                   const finalText =
                     textBlock && textBlock.type === 'text' ? textBlock.text : '';
+                  if (finalText.trim()) {
+                    this.log('INFO', 'AgenticExecutor', `[thought] ${finalText.trim()}`);
+                  }
                   this.log('INFO', 'AgenticExecutor', '--- Agent Complete ---');
                   turnSpan.update({
                     output: { status: 'complete', finalTextLength: finalText.length },
@@ -883,13 +887,19 @@ ${planContext}
                   const toolResults: Anthropic.ToolResultBlockParam[] = [];
                   const turnToolNames: string[] = [];
 
+                  // Log the LLM's Thought (text block that precedes tool calls)
+                  const thoughtBlock = response.content.find((b) => b.type === 'text');
+                  if (thoughtBlock && thoughtBlock.type === 'text' && thoughtBlock.text.trim()) {
+                    this.log('INFO', 'AgenticExecutor', `[thought] ${thoughtBlock.text.trim()}`);
+                  }
+
                   for (const block of toolUseBlocks) {
                     if (block.type !== 'tool_use') continue;
 
                     this.log(
                       'STEP',
                       'AgenticExecutor',
-                      `[tool] ${block.name}(${JSON.stringify(block.input).substring(0, 120)}...)`
+                      `[action] ${block.name} ${JSON.stringify(block.input, null, 2)}`
                     );
 
                     // ── Tool Dispatch (traced) ──

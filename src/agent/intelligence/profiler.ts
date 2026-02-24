@@ -10,6 +10,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { DiscoveredService, TargetProfile } from '../core/types.js';
+import { createAnthropicClient } from '../utils/llm-recorder.js';
 
 /** Model used for profiling - Haiku for speed and cost efficiency */
 export const PROFILER_MODEL = 'claude-haiku-4-5-20251001';
@@ -43,7 +44,7 @@ export class ProfilerAgent {
    * @param apiKey - Anthropic API key for Claude API calls
    */
   constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey });
+    this.client = createAnthropicClient(apiKey);
   }
 
   /**

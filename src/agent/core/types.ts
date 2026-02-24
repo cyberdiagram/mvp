@@ -342,6 +342,8 @@ export interface TacticalPlanObject {
   attack_vectors: AttackVector[];
   /** ISO timestamp of plan creation */
   created_at: string;
+  /** Absolute path to the saved JSON file on disk (set by saveTacticalPlans) */
+  plan_file_path?: string;
 }
 
 // ==================== EVALUATION LOOP ====================

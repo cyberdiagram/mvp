@@ -2,7 +2,12 @@
 
 import { ReasonerAgent, ProfilerAgent, EvaluatorAgent } from '../intelligence/index.js';
 import { VulnLookupAgent, RAGMemoryAgent, RAGMemoryDocument } from '../knowledge/index.js';
-import { ExecutorAgent, DualMCPAgent, AgenticExecutor, DataCleanerAgent } from '../execution/index.js';
+import {
+  ExecutorAgent,
+  DualMCPAgent,
+  AgenticExecutor,
+  DataCleanerAgent,
+} from '../execution/index.js';
 import { SkillManager } from '../utils/skill-manager.js';
 import {
   CleanedData,
@@ -166,22 +171,32 @@ export class PentestAgent {
   async initialize(): Promise<void> {
     this.log('INFO', 'Orchestrator', 'Initializing multi-agent system...');
 
-    // Load skills and inject into agents
+    // Load skills and inject into agents.
+    // The Reasoner receives ONLY user-defined tool rules (agent_rules.json) — NOT the full
+    // skill documentation. The Reasoner makes high-level strategic decisions and never writes
+    // nmap commands directly, so loading 6,000+ tokens of command syntax into it wastes
+    // ~22% of the 30k/min rate-limit budget. Command-level constraints from skill files are
+    // enforced by the Executor (embedded in execute_shell_cmd's tool description).
     await this.skillManager.loadSkills();
+    const rulesContext = this.skillManager.buildRulesPromptSection();
+    if (rulesContext) {
+      this.reasoner.setSkillContext(rulesContext);
+    }
     const skillContext = this.skillManager.buildSkillContext('reconnaissance pentest');
-    this.reasoner.setSkillContext(skillContext);
     const parsingSkills = this.skillManager.buildSkillContext('fingerprint parsing');
     this.dataCleaner.setSkillContext(parsingSkills);
-    this.log('INFO', 'Orchestrator', '✓ Skills loaded (Reasoner + DataCleaner)');
+    this.log(
+      'INFO',
+      'Orchestrator',
+      '✓ Skills loaded — Reasoner: rules only | DataCleaner: parsing skills | Executor: constraints via tool description'
+    );
 
     // Initialize Dual MCP Agent (RAG stdio + Kali HTTP)
     await this.mcpAgent.initialize({
       ragMemory: this.config.ragMemoryServerPath
         ? { path: this.config.ragMemoryServerPath }
         : undefined,
-      kali: this.config.kaliMcpUrl
-        ? { url: this.config.kaliMcpUrl }
-        : undefined,
+      kali: this.config.kaliMcpUrl ? { url: this.config.kaliMcpUrl } : undefined,
     });
     this.log('INFO', 'Orchestrator', '✓ Dual MCP Agent initialized');
 
@@ -189,6 +204,26 @@ export class PentestAgent {
     const kaliTools = this.mcpAgent.getKaliToolNames();
     const allTools = [...kaliTools, 'rag_recall', 'rag_query_playbooks'];
     this.executor = new ExecutorAgent(this.config.anthropicApiKey, allTools);
+
+    // Embed skill constraint lines directly inside execute_shell_cmd's tool description.
+    // We do NOT inject the full skill text (it contains old tool names like nmap_port_scan
+    // that no longer exist and would confuse the Executor). Instead we extract only lines
+    // containing hard constraint keywords so the model sees the rules exactly where it
+    // looks when choosing command arguments — inside the tool it actually uses.
+    const CONSTRAINT_RE = /\b(NEVER|MUST NOT|DO NOT|WARNING|IMPORTANT|CRITICAL|ALWAYS|AVOID)\b/i;
+    const constraintLines = skillContext
+      .split('\n')
+      .filter((line) => CONSTRAINT_RE.test(line))
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && line.length < 200); // skip stray long lines
+
+    if (constraintLines.length > 0) {
+      const constraintBlock =
+        'Skill constraints (obey when building commands):\n  ' + constraintLines.join('\n  ');
+      this.executor.appendToToolDescription('execute_shell_cmd', constraintBlock);
+    }
+
+    this.log('INFO', 'Orchestrator', '✓ Skills loaded (Reasoner + DataCleaner + Executor)');
 
     // Initialize AgenticExecutor (autonomous OODA loop)
     if (this.mcpAgent.isKaliConnected()) {
@@ -268,9 +303,33 @@ export class PentestAgent {
         lastError = error as Error;
 
         if (attempt < maxRetries) {
-          // Rate limit errors (HTTP 429) require much longer waits than transient errors
+          // 400 "prompt too long" — retrying with identical content will always fail.
+          // Bail immediately so the error surfaces cleanly instead of wasting 3 attempts.
+          const isContextTooLong =
+            (error as any)?.status === 400 ||
+            (error as any)?.statusCode === 400 ||
+            lastError.message?.includes('prompt is too long') ||
+            lastError.message?.includes('too long') ||
+            lastError.message?.startsWith('400');
+          if (isContextTooLong) {
+            this.log(
+              'ERROR',
+              'Orchestrator',
+              '✗ Prompt too long — aborting retries (truncation required)'
+            );
+            break;
+          }
+
+          // Rate limit errors (HTTP 429) require much longer waits than transient errors.
+          // The Anthropic SDK may report the status on .status or .statusCode, and the
+          // human-readable message uses "rate limit" (space) while the JSON type uses
+          // "rate_limit" (underscore) — check all variants plus the leading "429" prefix.
           const isRateLimit =
-            (error as any)?.status === 429 || lastError.message?.includes('rate_limit');
+            (error as any)?.status === 429 ||
+            (error as any)?.statusCode === 429 ||
+            lastError.message?.includes('rate_limit') ||
+            lastError.message?.includes('rate limit') ||
+            lastError.message?.startsWith('429');
           const baseDelay = isRateLimit ? 30_000 : initialDelayMs;
           const delayMs = baseDelay * Math.pow(2, attempt); // Exponential backoff
           this.log(
@@ -284,7 +343,11 @@ export class PentestAgent {
     }
 
     // All retries exhausted
-    this.log('ERROR', 'Orchestrator', `✗ All ${maxRetries + 1} attempts failed: ${lastError?.message}`);
+    this.log(
+      'ERROR',
+      'Orchestrator',
+      `✗ All ${maxRetries + 1} attempts failed: ${lastError?.message}`
+    );
     return null;
   }
 
@@ -386,7 +449,11 @@ export class PentestAgent {
     vulnerabilities: VulnerabilityInfo[],
     playbooks: RAGMemoryDocument[]
   ): Promise<void> {
-    this.log('INFO', 'Intelligence', `[iter ${iteration}] _logIntelligenceRecord called — services=${newServices.length} profile=${!!profile} vulns=${vulnerabilities.length} playbooks=${playbooks.length}`);
+    this.log(
+      'INFO',
+      'Intelligence',
+      `[iter ${iteration}] _logIntelligenceRecord called — services=${newServices.length} profile=${!!profile} vulns=${vulnerabilities.length} playbooks=${playbooks.length}`
+    );
     try {
       const fs = await import('fs/promises');
       const path = await import('path');
@@ -425,7 +492,11 @@ export class PentestAgent {
       const filepath = path.join(intelDir, filename);
       await fs.writeFile(filepath, JSON.stringify(record, null, 2), 'utf-8');
 
-      this.log('INFO', 'Intelligence', `✓ Logged intelligence record → logs/Intelligence/${filename}`);
+      this.log(
+        'INFO',
+        'Intelligence',
+        `✓ Logged intelligence record → logs/Intelligence/${filename}`
+      );
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.log('WARN', 'Intelligence', `⚠ Failed to log intelligence record: ${msg}`);
@@ -464,7 +535,7 @@ export class PentestAgent {
           this.log('WARN', 'RAG Memory', '⚠ DEBUG: Anti-pattern injection SKIPPED');
         } else {
           this.log('INFO', 'RAG Memory', `✓ Injected ${antiPatterns.length} failure lesson(s)`);
-          this.reasoner.injectMemoryContext(formattedText);
+          this.reasoner.injectAntiPatternContext(formattedText);
         }
       }
     } catch (err) {
@@ -701,7 +772,11 @@ export class PentestAgent {
     currentIntelligence: IntelligenceContext | null,
     iteration: number
   ): Promise<IntelligenceContext | null> {
-    this.log('INFO', 'Intelligence', `[iter ${iteration}] allDiscoveredServices=${allDiscoveredServices.length}`);
+    this.log(
+      'INFO',
+      'Intelligence',
+      `[iter ${iteration}] allDiscoveredServices=${allDiscoveredServices.length}`
+    );
 
     // Skip if no services discovered
     if (allDiscoveredServices.length === 0) {
@@ -715,7 +790,11 @@ export class PentestAgent {
       return !this.analyzedServiceFingerprints.has(fingerprint);
     });
 
-    this.log('INFO', 'Intelligence', `[iter ${iteration}] newServices=${newServices.length}, alreadyAnalyzed=${allDiscoveredServices.length - newServices.length}`);
+    this.log(
+      'INFO',
+      'Intelligence',
+      `[iter ${iteration}] newServices=${newServices.length}, alreadyAnalyzed=${allDiscoveredServices.length - newServices.length}`
+    );
 
     // Skip if no new services (all already analyzed)
     if (newServices.length === 0) {
@@ -736,7 +815,11 @@ export class PentestAgent {
         2, // Max 2 retries
         1000 // 1s initial delay
       ).catch((err) => {
-        this.log('WARN', 'Profiler', `⚠ Failed after retries (continuing without profile): ${err.message}`);
+        this.log(
+          'WARN',
+          'Profiler',
+          `⚠ Failed after retries (continuing without profile): ${err.message}`
+        );
         return null;
       }),
       this.retryWithBackoff(
@@ -744,7 +827,11 @@ export class PentestAgent {
         2, // Max 2 retries
         1000 // 1s initial delay
       ).catch((err) => {
-        this.log('WARN', 'VulnLookup', `⚠ Failed after retries (continuing without CVE data): ${err.message}`);
+        this.log(
+          'WARN',
+          'VulnLookup',
+          `⚠ Failed after retries (continuing without CVE data): ${err.message}`
+        );
         return [];
       }),
     ]);
@@ -818,10 +905,20 @@ export class PentestAgent {
     this.log('RESULT', 'Intelligence', '✓ Intelligence context updated in Reasoner');
 
     // RAG Memory Recall (Playbooks + Anti-Patterns) - always run for new services
-    const ragPlaybooks = await this._runRAGMemoryForIntelligence(newServices, validNewVulns, newTargetProfile);
+    const ragPlaybooks = await this._runRAGMemoryForIntelligence(
+      newServices,
+      validNewVulns,
+      newTargetProfile
+    );
 
     // Log this iteration's intelligence data to logs/Intelligence/
-    await this._logIntelligenceRecord(iteration, newServices, newTargetProfile, validNewVulns, ragPlaybooks);
+    await this._logIntelligenceRecord(
+      iteration,
+      newServices,
+      newTargetProfile,
+      validNewVulns,
+      ragPlaybooks
+    );
 
     return intelligence;
   }
@@ -863,8 +960,21 @@ export class PentestAgent {
       });
 
       if (playbooks.length > 0 && formattedText) {
-        this.log('INFO', 'RAG Memory', `✓ Injected ${playbooks.length} attack playbook(s)`);
-        this.reasoner.injectMemoryContext(formattedText);
+        // Cap playbook context to prevent exceeding the 200k-token context window.
+        // Full industry playbooks can be 500k+ chars; 40k chars (~10k tokens) is
+        // enough to convey the key attack vectors and payloads for 3-5 playbooks.
+        const MAX_PLAYBOOK_CHARS = 40_000;
+        const cappedText =
+          formattedText.length > MAX_PLAYBOOK_CHARS
+            ? formattedText.slice(0, MAX_PLAYBOOK_CHARS) +
+              '\n[... playbook content truncated to stay within context limit ...]'
+            : formattedText;
+        this.log(
+          'INFO',
+          'RAG Memory',
+          `✓ Injected ${playbooks.length} attack playbook(s) (${cappedText.length}ch / ${formattedText.length}ch raw)`
+        );
+        this.reasoner.injectPlaybookContext(cappedText);
       }
 
       return playbooks;
@@ -990,10 +1100,19 @@ export class PentestAgent {
     }
 
     // Generic failure loop detection: all queries returned empty results
-    const negativeKeywords = ['no exploits found', '0 results', 'no matches', 'not found', '0 shellcodes', '0 exploits', 'no relevant warnings', 'no relevant playbooks'];
-    const allStepsNegative = allResults.length > 0 && allResults.every((r) =>
-      negativeKeywords.some((kw) => r.summary.toLowerCase().includes(kw))
-    );
+    const negativeKeywords = [
+      'no exploits found',
+      '0 results',
+      'no matches',
+      'not found',
+      '0 shellcodes',
+      '0 exploits',
+      'no relevant warnings',
+      'no relevant playbooks',
+    ];
+    const allStepsNegative =
+      allResults.length > 0 &&
+      allResults.every((r) => negativeKeywords.some((kw) => r.summary.toLowerCase().includes(kw)));
 
     if (allStepsNegative) {
       obs += `\n\n[SYSTEM ADVICE - DATABASE EXHAUSTION]`;
@@ -1031,6 +1150,9 @@ export class PentestAgent {
    * await agent.reconnaissance('scanme.nmap.org'); // Scan a single host
    */
   async reconnaissance(target: string): Promise<ReconResult> {
+    // Generate a fresh session ID for each recon run (agent is reused across tasks in worker mode)
+    this.sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
     this.log('INFO', 'Orchestrator', `Starting reconnaissance on: ${target}`);
     this.log('INFO', 'Orchestrator', `Session ID: ${this.sessionId}`);
     console.log('='.repeat(60));
@@ -1052,163 +1174,198 @@ export class PentestAgent {
     // MAIN RECONNAISSANCE LOOP (wrapped in Langfuse trace)
     // ========================================================================
     await startActiveObservation('reconnaissance', async (rootSpan) => {
-    rootSpan.update({
-      input: { target, sessionId: this.sessionId },
-      metadata: { maxIterations },
-    });
-    await propagateAttributes({
-      sessionId: this.sessionId,
-      traceName: `recon-${target}`,
-      tags: ['reconnaissance', 'pentest'],
-      metadata: { target },
-    }, async () => {
-
-    let missionComplete = false;
-
-    while (iteration < maxIterations && !missionComplete) {
-      iteration++;
-      this.log('STEP', 'Orchestrator', `=== Iteration ${iteration} ===`);
-
-      await startActiveObservation(`iteration-${iteration}`, async (iterSpan) => {
-      iterSpan.update({ input: { iteration, observation: observation.substring(0, 500) } });
-
-      // ======================================================================
-      // PHASE 0: RAG Memory Recall (Pre-Reasoning)
-      // ======================================================================
-      await startActiveObservation('phase0-rag-recall', async (span) => {
-        await this._runRAGMemoryRecall(observation);
+      rootSpan.update({
+        input: { target, sessionId: this.sessionId },
+        metadata: { maxIterations },
       });
+      await propagateAttributes(
+        {
+          sessionId: this.sessionId,
+          traceName: `recon-${target}`,
+          tags: ['reconnaissance', 'pentest'],
+          metadata: { target },
+        },
+        async () => {
+          let missionComplete = false;
 
-      // ======================================================================
-      // PHASE 1: Strategic Reasoning
-      // ======================================================================
-      let reasoning!: ReasonerOutput;
-      await startActiveObservation('phase1-reasoning', async (span) => {
-        reasoning = await this._runReasoningPhase(observation);
-        span.update({
-          output: { thought: reasoning.thought, action: reasoning.action, is_complete: reasoning.is_complete },
-        });
-      });
+          while (iteration < maxIterations && !missionComplete) {
+            iteration++;
+            this.log('STEP', 'Orchestrator', `=== Iteration ${iteration} ===`);
 
-      // Collect every tactical plan (displayed + saved after all iterations)
-      if (reasoning.tactical_plan) {
-        allTacticalPlans.push(reasoning.tactical_plan);
-      }
+            await startActiveObservation(`iteration-${iteration}`, async (iterSpan) => {
+              iterSpan.update({ input: { iteration, observation: observation.substring(0, 500) } });
 
-      // Check if mission is complete
-      if (reasoning.is_complete) {
-        this.log('INFO', 'Orchestrator', 'Reasoner indicates mission complete');
-        iterSpan.update({ output: { status: 'mission_complete' } });
-        missionComplete = true;
-        return;
-      }
+              // ======================================================================
+              // PHASE 0: RAG Memory Recall (Pre-Reasoning)
+              // ======================================================================
+              await startActiveObservation('phase0-rag-recall', async (span) => {
+                await this._runRAGMemoryRecall(observation);
+              });
 
-      // ======================================================================
-      // PHASE 2: Tactical Execution Planning
-      // ======================================================================
-      let plan: ExecutorPlan | null = null;
-      await startActiveObservation('phase2-execution-planning', async (span) => {
-        const openPorts = [...new Set(allDiscoveredServices.map((s) => s.port))];
-        plan = await this._runExecutionPlanning(reasoning, target, openPorts);
-        span.update({ output: { steps: plan?.steps.length ?? 0 } });
-      });
+              // ======================================================================
+              // PHASE 1: Strategic Reasoning
+              // ======================================================================
+              let reasoning!: ReasonerOutput;
+              await startActiveObservation('phase1-reasoning', async (span) => {
+                reasoning = await this._runReasoningPhase(observation);
+                span.update({
+                  output: {
+                    thought: reasoning.thought,
+                    action: reasoning.action,
+                    is_complete: reasoning.is_complete,
+                  },
+                });
+              });
 
-      // If no executable steps, continue to next iteration
-      if (!plan) {
-        observation = this._prepareNextObservation([]);
-        iterSpan.update({ output: { status: 'no_executable_steps' } });
-        return;
-      }
+              // Collect every tactical plan (displayed + saved after all iterations)
+              if (reasoning.tactical_plan) {
+                allTacticalPlans.push(reasoning.tactical_plan);
+              }
 
-      // ======================================================================
-      // PHASE 3: Tool Execution and Data Cleaning
-      // ======================================================================
-      let executionResults: CleanedData[] = [];
-      let executionFailures: Array<{ tool: string; error: string }> = [];
-      let repeatedCommands: string[] = [];
-      await startActiveObservation('phase3-tool-execution', async (span) => {
-        const result = await this._runToolExecutionLoop(plan!, allDiscoveredServices);
-        executionResults = result.results;
-        executionFailures = result.failures;
-        repeatedCommands = result.repeatedCommands;
-        if (result.fileVulns.length > 0) allFileVulns.push(...result.fileVulns);
-        span.update({
-          output: {
-            results: executionResults.length,
-            failures: executionFailures.length,
-            repeatedCommands: repeatedCommands.length,
-          },
-        });
-      });
-      aggregatedResults.push(...executionResults);
+              // Check if mission is complete
+              if (reasoning.is_complete) {
+                this.log('INFO', 'Orchestrator', 'Reasoner indicates mission complete');
 
-      // ======================================================================
-      // PHASE 4: Intelligence Layer Analysis
-      // ======================================================================
-      await startActiveObservation('phase4-intelligence', async (span) => {
-        currentIntelligence = await this._runIntelligencePhase(
-          allDiscoveredServices,
-          currentIntelligence,
-          iteration
-        );
-        span.update({
-          output: {
-            services: allDiscoveredServices.length,
-            vulnerabilities: currentIntelligence?.vulnerabilities?.length ?? 0,
-          },
-        });
-      });
+                // RC2: Phase 4b was skipped this iteration (it follows Phase 1's early return).
+                // Inject playbooks now using all discovered services before accepting completion.
+                if (this.ragMemory && allDiscoveredServices.length > 0) {
+                  await this._runRAGMemoryForIntelligence(
+                    allDiscoveredServices,
+                    currentIntelligence?.vulnerabilities ?? [],
+                    currentIntelligence?.targetProfile ?? null
+                  );
+                }
 
-      // Attach intelligence to the last result for downstream use
-      const lastResult = executionResults[executionResults.length - 1];
-      if (lastResult && currentIntelligence) {
-        lastResult.intelligence = currentIntelligence;
-      }
+                // If no tactical plan was produced, re-prompt once with the new playbook context.
+                if (!reasoning.tactical_plan && allTacticalPlans.length === 0) {
+                  this.log(
+                    'INFO',
+                    'Orchestrator',
+                    'No tactical plan yet — re-prompting Reasoner with playbook context'
+                  );
+                  const finalReasoning = await this._runReasoningPhase(
+                    'Reconnaissance is complete. You now have full playbook context injected. ' +
+                      'You MUST now produce a tactical_plan with at least one attack vector before finishing. ' +
+                      'Generate the plan based on all discovered services and target intelligence.'
+                  );
+                  if (finalReasoning.tactical_plan) {
+                    allTacticalPlans.push(finalReasoning.tactical_plan);
+                  }
+                }
 
-      // ======================================================================
-      // PHASE 5: Evaluation and Logging
-      // ======================================================================
-      if (lastResult) {
-        await this._runEvaluationAndLogging(
-          reasoning,
-          currentIntelligence,
-          lastResult,
-          iteration,
-          observation
-        );
-      }
+                iterSpan.update({ output: { status: 'mission_complete' } });
+                missionComplete = true;
+                return;
+              }
 
-      // ======================================================================
-      // PHASE 6: Prepare Next Observation (ALL results, not just last)
-      // ======================================================================
-      observation = this._prepareNextObservation(
-        executionResults,
-        executionFailures,
-        repeatedCommands
-      );
-      this.reasoner.addObservation(observation);
+              // ======================================================================
+              // PHASE 2: Tactical Execution Planning
+              // ======================================================================
+              let plan: ExecutorPlan | null = null;
+              await startActiveObservation('phase2-execution-planning', async (span) => {
+                const openPorts = [...new Set(allDiscoveredServices.map((s) => s.port))];
+                plan = await this._runExecutionPlanning(reasoning, target, openPorts);
+                span.update({ output: { steps: plan?.steps.length ?? 0 } });
+              });
 
-      iterSpan.update({ output: { status: 'completed', resultsThisIteration: executionResults.length } });
-      }); // end iteration span
+              // If no executable steps, continue to next iteration
+              if (!plan) {
+                observation = this._prepareNextObservation([]);
+                iterSpan.update({ output: { status: 'no_executable_steps' } });
+                return;
+              }
 
-      // Small delay between iterations to avoid overwhelming the system
-      await new Promise((resolve) => setTimeout(resolve, 500));
+              // ======================================================================
+              // PHASE 3: Tool Execution and Data Cleaning
+              // ======================================================================
+              let executionResults: CleanedData[] = [];
+              let executionFailures: Array<{ tool: string; error: string }> = [];
+              let repeatedCommands: string[] = [];
+              await startActiveObservation('phase3-tool-execution', async (span) => {
+                const result = await this._runToolExecutionLoop(plan!, allDiscoveredServices);
+                executionResults = result.results;
+                executionFailures = result.failures;
+                repeatedCommands = result.repeatedCommands;
+                if (result.fileVulns.length > 0) allFileVulns.push(...result.fileVulns);
+                span.update({
+                  output: {
+                    results: executionResults.length,
+                    failures: executionFailures.length,
+                    repeatedCommands: repeatedCommands.length,
+                  },
+                });
+              });
+              aggregatedResults.push(...executionResults);
 
-      // Break out of the while loop if the reasoner indicated completion inside the iteration
-      if (aggregatedResults.length > 0 || iteration >= maxIterations) {
-        // Check if mission was marked complete (reasoning.is_complete was handled inside the span)
-      }
-    }
+              // ======================================================================
+              // PHASE 4: Intelligence Layer Analysis
+              // ======================================================================
+              await startActiveObservation('phase4-intelligence', async (span) => {
+                currentIntelligence = await this._runIntelligencePhase(
+                  allDiscoveredServices,
+                  currentIntelligence,
+                  iteration
+                );
+                span.update({
+                  output: {
+                    services: allDiscoveredServices.length,
+                    vulnerabilities: currentIntelligence?.vulnerabilities?.length ?? 0,
+                  },
+                });
+              });
 
-    rootSpan.update({
-      output: {
-        totalIterations: iteration,
-        totalResults: aggregatedResults.length,
-        servicesDiscovered: allDiscoveredServices.length,
-      },
-    });
+              // Attach intelligence to the last result for downstream use
+              const lastResult = executionResults[executionResults.length - 1];
+              if (lastResult && currentIntelligence) {
+                lastResult.intelligence = currentIntelligence;
+              }
 
-    }); // end propagateAttributes
+              // ======================================================================
+              // PHASE 5: Evaluation and Logging
+              // ======================================================================
+              if (lastResult) {
+                await this._runEvaluationAndLogging(
+                  reasoning,
+                  currentIntelligence,
+                  lastResult,
+                  iteration,
+                  observation
+                );
+              }
+
+              // ======================================================================
+              // PHASE 6: Prepare Next Observation (ALL results, not just last)
+              // ======================================================================
+              observation = this._prepareNextObservation(
+                executionResults,
+                executionFailures,
+                repeatedCommands
+              );
+              this.reasoner.addObservation(observation);
+
+              iterSpan.update({
+                output: { status: 'completed', resultsThisIteration: executionResults.length },
+              });
+            }); // end iteration span
+
+            // Small delay between iterations to avoid overwhelming the system
+            await new Promise((resolve) => setTimeout(resolve, 500));
+
+            // Break out of the while loop if the reasoner indicated completion inside the iteration
+            if (aggregatedResults.length > 0 || iteration >= maxIterations) {
+              // Check if mission was marked complete (reasoning.is_complete was handled inside the span)
+            }
+          }
+
+          rootSpan.update({
+            output: {
+              totalIterations: iteration,
+              totalResults: aggregatedResults.length,
+              servicesDiscovered: allDiscoveredServices.length,
+            },
+          });
+        }
+      ); // end propagateAttributes
     }); // end root span
 
     console.log('\n' + '='.repeat(60));
@@ -1392,7 +1549,11 @@ export class PentestAgent {
       // Write training pairs to file
       await fs.writeFile(filepath, JSON.stringify(this.trainingPairs, null, 2), 'utf-8');
 
-      this.log('RESULT', 'Training Data', `✓ Saved ${this.trainingPairs.length} training pairs to ${filename}`);
+      this.log(
+        'RESULT',
+        'Training Data',
+        `✓ Saved ${this.trainingPairs.length} training pairs to ${filename}`
+      );
 
       // Clear training pairs after saving
       this.trainingPairs = [];
@@ -1550,10 +1711,7 @@ export class PentestAgent {
    * @param plans - Array of tactical plans collected during reconnaissance
    * @param target - The target that was scanned (for metadata)
    */
-  private async saveTacticalPlans(
-    plans: TacticalPlanObject[],
-    target: string
-  ): Promise<void> {
+  private async saveTacticalPlans(plans: TacticalPlanObject[], target: string): Promise<void> {
     try {
       const fs = await import('fs/promises');
       const path = await import('path');
@@ -1565,6 +1723,7 @@ export class PentestAgent {
         const filename = `${this.sessionId}_${plan.plan_id}.json`;
         const filepath = path.join(tacticalDir, filename);
         await fs.writeFile(filepath, JSON.stringify(plan, null, 2), 'utf-8');
+        plan.plan_file_path = filepath;
         this.log('RESULT', 'Tactical Plan', `✓ Saved ${filename}`);
       }
 

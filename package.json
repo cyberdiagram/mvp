@@ -8,7 +8,11 @@
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js",
     "worker": "tsc && node dist/worker.js",
-    "worker:dev": "tsx src/worker.ts"
+    "worker:dev": "tsx src/worker.ts",
+    "worker:record": "RECORD_LLM_CALLS=record LLM_CASSETTE_DIR=./logs/cassettes tsx src/worker.ts",
+    "worker:replay": "RECORD_LLM_CALLS=replay LLM_CASSETTE_DIR=./logs/cassettes tsx src/worker.ts",
+    "test:reset": "bash scripts/test-reset.sh",
+    "test:check": "bash scripts/test-reset.sh --check-only"
   },
   "repository": {
     "type": "git",

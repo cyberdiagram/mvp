@@ -11,6 +11,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { CleanedData, NmapScanResult, DiscoveredService, NmapPortResult, VulnerabilityInfo } from '../core/types.js';
+import { createAnthropicClient } from '../utils/llm-recorder.js';
 
 /** Model used for data parsing - Haiku for speed and cost efficiency */
 export const DATA_CLEANER_MODEL = 'claude-haiku-4-5-20251001';
@@ -141,7 +142,7 @@ export class DataCleanerAgent {
    * @param apiKey - Anthropic API key for Claude API calls (for LLM fallback)
    */
   constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey });
+    this.client = createAnthropicClient(apiKey);
   }
 
   /**

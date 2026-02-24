@@ -8,6 +8,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { ExecutorPlan, ExecutorStep, ReasonerOutput } from '../core/types.js';
+import { createAnthropicClient } from '../utils/llm-recorder.js';
 
 /** Model used for execution planning - Haiku for speed and efficiency */
 export const EXECUTOR_MODEL = 'claude-haiku-4-5-20251001';
@@ -15,8 +16,8 @@ export const EXECUTOR_MODEL = 'claude-haiku-4-5-20251001';
 /** Max tokens for Executor responses - plans are typically shorter */
 export const EXECUTOR_MAX_TOKENS = 1000;
 
-/** Known tool descriptions for the system prompt, keyed by tool name */
-const TOOL_DESCRIPTIONS: Record<string, string> = {
+/** Default tool descriptions — treated as a template; instances may enrich them. */
+const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
   execute_shell_cmd: '**execute_shell_cmd**: Execute an arbitrary shell command in the Kali container\n  Arguments: { "command": "shell command string" }',
   write_file: '**write_file**: Write content to a file in /app/scripts/\n  Arguments: { "filename": "name", "content": "file content" }',
   execute_script: '**execute_script**: Execute a Python script from /app/scripts/\n  Arguments: { "filename": "script.py", "args": "optional args" }',
@@ -30,10 +31,10 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
 /**
  * Builds the tool listing section for the system prompt from dynamic tool names.
  */
-function buildToolListing(allowedTools: Set<string>): string {
+function buildToolListing(allowedTools: Set<string>, toolDescs: Record<string, string>): string {
   const lines: string[] = [];
   for (const tool of allowedTools) {
-    const desc = TOOL_DESCRIPTIONS[tool];
+    const desc = toolDescs[tool];
     if (desc) {
       lines.push(`- ${desc}`);
     } else {
@@ -46,7 +47,7 @@ function buildToolListing(allowedTools: Set<string>): string {
 /**
  * Builds the executor system prompt with a dynamic tool listing.
  */
-function buildExecutorSystemPrompt(allowedTools: Set<string>): string {
+function buildExecutorSystemPrompt(allowedTools: Set<string>, toolDescs: Record<string, string>): string {
   return `You are a tactical workflow executor for penetration testing operations.
 
 Your role is to:
@@ -57,7 +58,7 @@ Your role is to:
 
 # Available Tools (EXHAUSTIVE LIST — you MUST only use tools from this list)
 
-${buildToolListing(allowedTools)}
+${buildToolListing(allowedTools, toolDescs)}
 
 # STRICT CONSTRAINT
 You MUST ONLY use tools from the list above. Do NOT invent, guess, or hallucinate tool names.
@@ -120,7 +121,10 @@ export class ExecutorAgent {
   /** Dynamically populated set of allowed tool names */
   private allowedTools: Set<string>;
 
-  /** Cached system prompt (built once from allowed tools) */
+  /** Per-instance tool descriptions (copy of defaults, enriched by appendToToolDescription) */
+  private toolDescriptions: Record<string, string>;
+
+  /** Cached system prompt — rebuilt whenever tool descriptions change */
   private systemPrompt: string;
 
   /**
@@ -130,12 +134,37 @@ export class ExecutorAgent {
    * @param toolNames - Dynamic list of allowed tool names (from Kali MCP discovery + RAG tools)
    */
   constructor(apiKey: string, toolNames?: string[]) {
-    this.client = new Anthropic({ apiKey });
+    this.client = createAnthropicClient(apiKey);
     this.allowedTools = new Set(
       toolNames || ['execute_shell_cmd', 'searchsploit_search', 'rag_recall', 'rag_query_playbooks']
     );
-    this.systemPrompt = buildExecutorSystemPrompt(this.allowedTools);
+    this.toolDescriptions = { ...DEFAULT_TOOL_DESCRIPTIONS };
+    this.systemPrompt = buildExecutorSystemPrompt(this.allowedTools, this.toolDescriptions);
     console.log(`[Executor] Initialized with ${this.allowedTools.size} allowed tools`);
+  }
+
+  /**
+   * Appends skill-derived constraint text to a specific tool's description.
+   *
+   * This embeds rules (e.g. "NEVER use nmap -p-") directly inside the tool
+   * listing the Executor reads, so the constraints appear exactly where the
+   * model looks when choosing command arguments — without introducing
+   * misleading tool names from old skill documentation.
+   *
+   * Rebuilds the system prompt after updating the description.
+   *
+   * @param toolName   - The MCP tool name to enrich (e.g. "execute_shell_cmd")
+   * @param constraint - Constraint text extracted from a skill file
+   */
+  appendToToolDescription(toolName: string, constraint: string): void {
+    if (!this.toolDescriptions[toolName]) {
+      console.log(`[Executor] ⚠ appendToToolDescription: unknown tool "${toolName}" — skipped`);
+      return;
+    }
+    this.toolDescriptions[toolName] += `\n  ${constraint}`;
+    // Rebuild system prompt so the cache_control block reflects the new description
+    this.systemPrompt = buildExecutorSystemPrompt(this.allowedTools, this.toolDescriptions);
+    console.log(`[Executor] ✓ Appended skill constraints to ${toolName} description`);
   }
 
   /**
@@ -211,17 +240,12 @@ export class ExecutorAgent {
       }
     }
 
-    // Use cache_control to cache static system prompt for token optimization
+    // System prompt already embeds any skill constraints inside tool descriptions
+    // (appended via appendToToolDescription). No second block needed.
     const response = await this.client.messages.create({
       model: EXECUTOR_MODEL,
       max_tokens: EXECUTOR_MAX_TOKENS,
-      system: [
-        {
-          type: 'text',
-          text: this.systemPrompt,
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
+      system: [{ type: 'text', text: this.systemPrompt, cache_control: { type: 'ephemeral' } }],
       messages: [
         {
           role: 'user',

@@ -10,6 +10,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { PredictionMetrics, EvaluationResult } from '../core/types.js';
+import { createAnthropicClient } from '../utils/llm-recorder.js';
 
 /** Model used for evaluation - Haiku for speed and cost efficiency */
 export const EVALUATOR_MODEL = 'claude-3-5-haiku-20241022';
@@ -87,7 +88,7 @@ export class EvaluatorAgent {
    * @param apiKey - Anthropic API key for Claude API calls
    */
   constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey });
+    this.client = createAnthropicClient(apiKey);
   }
 
   /**
