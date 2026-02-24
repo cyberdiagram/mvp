@@ -1,0 +1,36 @@
+{
+  "target": "192.168.1.100",
+  "session_id": "b168d1bf-965a-4ca3-b905-cde2ed1eecd2",
+  "completed_at": "2026-02-24T15:30:42.000Z",
+  "data": {
+    "executive_summary": "# Penetration Test Report — 192.168.1.100\n\n## 1. Overview\n...(full markdown from report-llm-response.json)...",
+
+    "remediation_snippets": [
+      {
+        "label": "Terraform — Block Public Tomcat Manager",
+        "language": "hcl",
+        "description": "Closes public access to Tomcat Manager (port 8080) via a security group DENY rule.",
+        "vulnerability_id": null,
+        "code": "resource \"aws_security_group_rule\" \"block_tomcat_manager\" { ... }"
+      }
+    ],
+
+    "compliance_findings": [
+      {
+        "regulation": "PDPA (Singapore)",
+        "status": "non_compliant",
+        "score": 35,
+        "items": ["Personal data accessible via SQL injection — Section 26 violation"],
+        "articles": ["Section 24 — Protection of Personal Data"]
+      }
+    ],
+
+    "anti_patterns": [
+      {
+        "type": "positive",
+        "title": "SSH Brute-Force Protection Active",
+        "detail": "fail2ban correctly blocked SSH brute-force attempts after 5 failed logins."
+      }
+    ]
+  }
+}

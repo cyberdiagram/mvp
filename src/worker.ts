@@ -18,8 +18,17 @@
 import 'dotenv/config';
 import path from 'path';
 import Redis from 'ioredis';
+import {
+  setupLLMRecorder,
+  resetGlobalRecorder,
+  getGlobalRecorderMode,
+} from './agent/utils/llm-recorder.js';
 import { PentestAgent } from './agent/index.js';
 import type { LogEntry, ReconResult } from './agent/core/types.js';
+
+// Activate LLM recorder/replayer before any agent is instantiated.
+// Reads RECORD_LLM_CALLS ('record'|'replay'|'off') and LLM_CASSETTE_PATH from env.
+setupLLMRecorder();
 
 // ─── Configuration ───────────────────────────────────────────
 
@@ -48,6 +57,8 @@ interface TaskData {
   phase: string;
   target: string;
   options?: string;
+  /** UUID of the preceding recon task — present on exec tasks created via create-task.sh */
+  recon_task_id?: string;
   [key: string]: string | undefined;
 }
 
@@ -144,6 +155,25 @@ async function main(): Promise<void> {
 
     console.log(`[worker] Phase: ${phase}, Target: ${target}`);
 
+    // ── Per-task cassette: when LLM_CASSETTE_DIR is set, auto-name the cassette
+    // based on phase + recon_task_id (exec) or task_id (recon/others) so each
+    // run is independently replayable without overwriting a shared file.
+    const cassetteDir = process.env.LLM_CASSETTE_DIR;
+    if (cassetteDir && getGlobalRecorderMode() !== 'off') {
+      let opts: Record<string, unknown> = {};
+      try { opts = JSON.parse(taskData.options || '{}'); } catch { /* ignore */ }
+
+      // For exec tasks, key the cassette on recon_task_id so the recording is
+      // clearly associated with the recon results it was built on.
+      const reconTaskId = taskData.recon_task_id
+        || (typeof opts.recon_task_id === 'string' ? opts.recon_task_id : null);
+      const cassetteId = (phase === 'exec' && reconTaskId)
+        ? reconTaskId
+        : taskId;
+      const cassettePath = path.join(cassetteDir, `${phase}-${cassetteId}.jsonl`);
+      resetGlobalRecorder(cassettePath);
+    }
+
     // Set current log channel for onLog callback
     currentLogChannel = logChannel;
 
@@ -152,11 +182,59 @@ async function main(): Promise<void> {
 
     try {
       switch (phase) {
-        case 'recon':
-        case 'plan': {
+        case 'recon': {
           const reconResult: ReconResult = await agent.reconnaissance(target);
 
-          // Build result payload
+          /**
+           * ReconResult payload published to `complete:{tenantId}:{taskId}`.
+           *
+           * Cyber-Bridge forwards this object verbatim as the `result` field of the
+           * `task:complete` Socket.io event received by the web frontend.
+           *
+           * Scalar summary fields (used by the frontend's Summary panel):
+           * @param session_id          - Unique session identifier assigned by PentestAgent at construction.
+           *                              Source: reconResult.sessionId
+           * @param target              - The IP address or hostname that was scanned.
+           *                              Source: taskData.target (from the Redis task hash)
+           * @param iterations          - Number of OODA loop iterations the recon mission completed.
+           *                              Source: reconResult.iterations
+           * @param services_discovered - Total count of unique host:port services found.
+           *                              Source: reconResult.discoveredServices.length
+           * @param tactical_plans      - Number of tactical attack plans generated during the session.
+           *                              Source: reconResult.tacticalPlans.length
+           * @param vulnerabilities     - Count of CVEs found by the VulnLookup agent and parsed from
+           *                              file output (fileVulns). Zero when neither source returned data.
+           *                              Source: reconResult.intelligence?.vulnerabilities?.length ?? 0
+           * @param summary             - Array of short human-readable strings describing key findings,
+           *                             one entry per CleanedData result collected across all iterations.
+           *                              Source: reconResult.results.map(r => r.summary)
+           * @param completed_at        - ISO 8601 timestamp of task completion (set by the worker).
+           *
+           * Structured intelligence fields (populate the four Phase 1 UI panels):
+           * @param target_profile      - OS family/version, technology stack, security posture
+           *                             ("hardened"|"standard"|"weak"), risk level, and evidence lines.
+           *                             Null when the Profiler agent produced no output.
+           *                              Source: reconResult.intelligence?.targetProfile ?? null
+           *                              Frontend panel: Target Profile
+           * @param discovered_services - Full array of enriched service objects, one per open port.
+           *                             Each entry includes host, port, protocol, service name, product,
+           *                             version, banner, category, criticality, and confidence score.
+           *                              Source: reconResult.discoveredServices (DiscoveredService[])
+           *                              Frontend panels: Network Topology, Target Profile (services table)
+           * @param key_findings        - Array of VulnerabilityInfo objects merged from the VulnLookup
+           *                             agent (CVE lookups via SearchSploit) and file-parsed vulns
+           *                             (fileVulns extracted by the DataCleaner from tool output files).
+           *                             Empty array when no CVEs were identified.
+           *                              Source: reconResult.intelligence?.vulnerabilities ?? []
+           *                              Frontend panel: Key Findings
+           * @param tactical_plans_data - Full TacticalPlanObject array, each containing plan_id,
+           *                             target_ip, context_hash, attack_vectors[], and created_at.
+           *                             Each attack vector includes the action template, prediction
+           *                             metrics (MITRE ATT&CK ID, CVE, confidence score), and RAG
+           *                             context (payload snippet, exploitation logic, source).
+           *                              Source: reconResult.tacticalPlans (TacticalPlanObject[])
+           *                              Frontend panel: (Attack Planning Phase 2)
+           */
           const result = {
             session_id: reconResult.sessionId,
             target,
@@ -166,17 +244,16 @@ async function main(): Promise<void> {
             vulnerabilities: reconResult.intelligence?.vulnerabilities?.length ?? 0,
             summary: reconResult.results.map((r) => r.summary),
             completed_at: new Date().toISOString(),
-            // Full intelligence data for web frontend modules
             target_profile: reconResult.intelligence?.targetProfile ?? null,
             discovered_services: reconResult.discoveredServices,
             key_findings: reconResult.intelligence?.vulnerabilities ?? [],
-            // Full tactical plan array for Phase 2 UI
             tactical_plans_data: reconResult.tacticalPlans,
           };
 
           // Atomic update + publish
           const pipeline = redis.pipeline();
           pipeline.hset(taskKey, 'state', 'completed');
+          pipeline.hset(taskKey, 'session_id', reconResult.sessionId);
           pipeline.hset(taskKey, 'result', JSON.stringify(result));
           await pipeline.exec();
 
@@ -190,10 +267,26 @@ async function main(): Promise<void> {
             throw new Error('Kali MCP server not connected — cannot run exec phase');
           }
 
-          const agentResult = await agent.agenticExecutor.runAgentLoop(target, 15);
+          // Parse options forwarded from the web UI
+          let opts: Record<string, unknown> = {};
+          try { opts = JSON.parse(taskData.options || '{}'); } catch { /* ignore */ }
+
+          const planFilePath = typeof opts.plan_file_path === 'string' ? opts.plan_file_path : null;
+
+          let agentResult;
+          if (planFilePath) {
+            // Strategy 1 — Tool-Based Autonomy with tactical plan
+            const { readFileSync } = await import('fs');
+            const plan = JSON.parse(readFileSync(planFilePath, 'utf-8'));
+            agentResult = await agent.agenticExecutor.runAgentWithTacticalPlan(plan, 'tool');
+          } else {
+            // Fallback: free-form agent loop on the target
+            agentResult = await agent.agenticExecutor.runAgentLoop(target, 15);
+          }
 
           const result = {
             target,
+            plan_file_path: planFilePath ?? null,
             turns_used: agentResult.turnsUsed,
             tool_calls: agentResult.toolCalls.length,
             final_text: agentResult.finalText,
@@ -210,7 +303,30 @@ async function main(): Promise<void> {
           break;
         }
 
-        case 'report':
+        case 'report': {
+          let opts: Record<string, unknown> = {};
+          try { opts = JSON.parse(taskData.options || '{}'); } catch { /* ignore */ }
+          opts.target = target;
+          opts.session_id = taskData.session_id ?? '';
+
+          const reportOnLog = (line: string) => {
+            redis.publish(logChannel, line).catch(() => {});
+          };
+
+          const { generateReport } = await import('./phases/report.js');
+          const reportResult = await generateReport(opts, reportOnLog);
+
+          const pipeline = redis.pipeline();
+          pipeline.hset(taskKey, 'state', 'completed');
+          pipeline.hset(taskKey, 'session_id', reportResult.session_id);
+          pipeline.hset(taskKey, 'result', JSON.stringify(reportResult));
+          await pipeline.exec();
+
+          await redis.publish(completeChannel, JSON.stringify(reportResult));
+          console.log(`[worker] Task ${taskId} state -> completed`);
+          break;
+        }
+
         default: {
           throw new Error(`Phase "${phase}" is not yet supported`);
         }

@@ -2,9 +2,9 @@
 
 ![Visitors](https://api.visitorbadge.io/api/visitors?path=flashoop/mvp&label=VISITORS&countColor=%23263238)
 
-> **Last Updated:** 2026-02-15
-> **Architecture Version:** 3.2 (Engine Worker + Cyber-Bridge Integration)
-> **Latest Feature:** Redis engine worker connecting PentestAgent to Cyber-Bridge web UI via Redis queue + Pub/Sub (2026-02-15)
+> **Last Updated:** 2026-02-24
+> **Architecture Version:** 3.3 (Report Phase + LLM-Powered Audit Generation)
+> **Latest Feature:** Report phase — `src/phases/report.ts` calls Claude Sonnet 4 with assembled session data to generate a Huawei-style 5-section markdown report plus remediation snippets, compliance findings, and anti-patterns (2026-02-24)
 
 An AI-powered penetration testing agent using Claude AI with a hierarchical multi-agent architecture, Intelligence Layer for target profiling, Evaluation Loop for continuous improvement, and RAG Memory System that queries security playbooks (successful techniques) and anti-patterns (failed exploits) from past experiences.
 
@@ -968,8 +968,8 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
 ## Implementation Status
 
-**Architecture Version**: 3.2 (Dual MCP + Docker + Engine Worker)
-**Completion**: Phase 1-7 ✅ + Agent Loop Hardening ✅ + Observability ✅ + Docker + Dual MCP + OODA Loop ✅ + Engine Worker ✅
+**Architecture Version**: 3.3 (Dual MCP + Docker + Engine Worker + Report Phase)
+**Completion**: Phase 1-7 ✅ + Agent Loop Hardening ✅ + Observability ✅ + Docker + Dual MCP + OODA Loop ✅ + Engine Worker ✅ + Report Phase ✅
 
 ### Summary (Phase 1-7)
 
@@ -984,6 +984,31 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 | **Phase 6** | Evaluator Agent | ✅ Complete | TP/FP/FN/TN labeling, prediction comparison, training data generation |
 | **Phase 7** | Orchestrator Integration | ✅ Complete | Parallel intelligence execution, RAG memory recall, evaluation loop, training data persistence |
 
+### Recent Enhancements (2026-02-24)
+
+**Report Phase — LLM-Powered Audit Generation (v3.3)**:
+
+| File | Change |
+|------|--------|
+| `src/phases/report.ts` | **NEW** — `generateReport(opts, onLog)` function: reads `opts.session_data` injected by Cyber-Bridge, calls Claude Sonnet 4 (`claude-sonnet-4-20250514`, `max_tokens: 8192`) with the assembled session context, fault-tolerantly parses the JSON response, and returns a flat `ReportPayload` |
+| `src/worker.ts` | **MODIFIED** — replaced `case 'report': throw` stub with real implementation: parses `opts`, creates a per-case `reportOnLog` closure that publishes to the Redis log channel, calls `generateReport`, then atomically writes state + session_id + result to Redis and publishes to the completion channel |
+
+**Report payload shape** (published to `complete:{tenantId}:{taskId}`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `target` | `string` | Target IP/hostname |
+| `session_id` | `string` | Parent session UUID |
+| `executive_summary` | `string` | Full 5-section Huawei-style markdown (Overview, Test Policy, Result Summary, Per-Vulnerability Detail, Security Suggestions) |
+| `remediation_snippets` | `RemediationSnippet[]` | IaC fix scripts; `language` constrained to `hcl\|yaml\|json\|python\|bash\|powershell` |
+| `compliance_findings` | `ComplianceFinding[]` | Per-regulation audit; `status` ∈ `compliant\|at_risk\|non_compliant`; `score` 0–100 |
+| `anti_patterns` | `AntiPattern[]` | Observed defence patterns; `type` ∈ `positive\|negative` |
+| `completed_at` | `string` | ISO 8601 timestamp |
+
+**Fault-tolerance**: if the LLM response is not valid JSON (e.g. wrapped in markdown fences), the parser strips fences and retries. If parsing still fails, field-by-field defaults are used so the task never fatally errors on a parse failure.
+
+---
+
 ### Recent Enhancements (2026-02-15)
 
 **Engine Worker + Cyber-Bridge Integration (v3.2)**:
@@ -991,7 +1016,7 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 - ✅ **Structured Logging**: All orchestrator and AgenticExecutor logs upgraded to `LogEntry` objects (`{ level, phase, message }`)
 - ✅ **`onLog` Callback**: Optional callback in `AgentConfig` for real-time log relay — worker publishes to Redis Pub/Sub
 - ✅ **`ReconResult` Return Type**: `reconnaissance()` now returns structured results (`sessionId`, `iterations`, `results`, `discoveredServices`, `tacticalPlans`, `intelligence`)
-- ✅ **Phase Mapping**: `recon`/`plan` → `reconnaissance()`, `exec` → `runAgentLoop()`, `report` → reserved
+- ✅ **Phase Mapping**: `recon`/`plan` → `reconnaissance()`, `exec` → `runAgentLoop()`, `report` → `generateReport()`
 - ✅ **Completion Signaling**: Atomic `HSET` + `PUBLISH` with result payload on task completion
 - ✅ **Standalone Compatibility**: CLI mode works identically — `onLog` is optional, `ioredis` only imported in `worker.ts`
 
