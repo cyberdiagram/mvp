@@ -383,13 +383,13 @@ npm run worker:dev
 When the agent starts, you'll see an interactive prompt:
 
 ```
-  ██████╗ ███████╗███╗   ██╗████████╗███████╗███████╗████████╗
-  ██╔══██╗██╔════╝████╗  ██║╚══██╔══╝██╔════╝██╔════╝╚══██╔══╝
-  ██████╔╝█████╗  ██╔██╗ ██║   ██║   █████╗  ███████╗   ██║
-  ██╔═══╝ ██╔══╝  ██║╚██╗██║   ██║   ██╔══╝  ╚════██║   ██║
-  ██║     ███████╗██║ ╚████║   ██║   ███████╗███████║   ██║
-  ╚═╝     ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚══════╝   ╚═╝
-                    AI-Powered Penetration Testing Agent v1.1
+   █████╗ ██╗   ██╗████████╗ ██████╗ ██████╗ ███████╗██████╗    █████╗ ██╗
+  ██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗██╔══██╗██╔════╝██╔══██╗  ██╔══██╗██║
+  ███████║██║   ██║   ██║   ██║   ██║██████╔╝█████╗  ██║  ██║  ███████║██║
+  ██╔══██║██║   ██║   ██║   ██║   ██║██╔══██╗██╔══╝  ██║  ██║  ██╔══██║██║
+  ██║  ██║╚██████╔╝   ██║   ╚██████╔╝██║  ██║███████╗██████╔╝ ██║  ██║██║
+  ╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═════╝  ╚═╝  ╚═╝╚═╝
+                    AI-Powered Penetration Testing Agent v1.2
 
 >
 ```
@@ -1280,7 +1280,7 @@ rag_query_playbooks (MCP) → parseRAGOutput() → pattern.prompt_text verbatim
 
 MIT License
 
-Copyright (c) 2026 cyberdiagram
+Copyright (c) 2026 AutoRed.ai
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
