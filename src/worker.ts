@@ -34,6 +34,7 @@ setupLLMRecorder();
 
 const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
 const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
+const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
 const TASK_QUEUE = 'cyberbridge:tasks';
 
 // ─── Redis Client Factory ────────────────────────────────────
@@ -42,6 +43,7 @@ function createRedisClient(name: string): InstanceType<typeof Redis> {
   const client = new Redis({
     host: REDIS_HOST,
     port: REDIS_PORT,
+    password: REDIS_PASSWORD,
     maxRetriesPerRequest: null,
   });
   client.on('error', (err: Error) => console.error(`[redis:${name}]`, err.message));
