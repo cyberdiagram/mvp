@@ -268,6 +268,7 @@ async function main(): Promise<void> {
           if (!agent.agenticExecutor) {
             throw new Error('Kali MCP server not connected — cannot run exec phase');
           }
+          const agenticExecutor = agent.agenticExecutor;
 
           // Parse options forwarded from the web UI
           let opts: Record<string, unknown> = {};
@@ -280,14 +281,14 @@ async function main(): Promise<void> {
               try {
                 const { readFileSync } = await import('fs');
                 const plan = JSON.parse(readFileSync(planFilePath, 'utf-8'));
-                return await agent.agenticExecutor.runAgentWithTacticalPlan(plan, 'tool');
+                return await agenticExecutor.runAgentWithTacticalPlan(plan, 'tool');
               } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
                 console.warn(`[worker] Plan file unavailable (${planFilePath}): ${msg} — falling back to free-form loop`);
               }
             }
             // Fallback: free-form agent loop on the target
-            return await agent.agenticExecutor.runAgentLoop(target, 15);
+            return await agenticExecutor.runAgentLoop(target, 15);
           })();
 
           const result = {
