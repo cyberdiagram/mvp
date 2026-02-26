@@ -287,7 +287,7 @@ async function main(): Promise<void> {
                   ?.replace(/^.*plan_/, 'plan_').replace(/\.json$/, '') ?? `plan_${Date.now()}`,
                 target_ip: target,
                 context_hash: 'supabase',
-                attack_vectors: planData.attack_vectors as import('../agent/core/types.js').AttackVector[],
+                attack_vectors: planData.attack_vectors as import('./agent/core/types.js').AttackVector[],
                 created_at: (planData.created_at as string | undefined) ?? new Date().toISOString(),
               };
               console.log(`[worker] Loaded tactical plan from Supabase (${(plan.attack_vectors as unknown[]).length} vectors)`);
