@@ -274,20 +274,40 @@ async function main(): Promise<void> {
           let opts: Record<string, unknown> = {};
           try { opts = JSON.parse(taskData.options || '{}'); } catch { /* ignore */ }
 
+          // Prefer plan_data (sourced from Supabase — survives container restarts).
+          // Fall back to plan_file_path (legacy, container-local) if plan_data absent.
+          const planData = opts.plan_data as Record<string, unknown> | undefined;
           const planFilePath = typeof opts.plan_file_path === 'string' ? opts.plan_file_path : null;
 
           const agentResult = await (async () => {
+            // Strategy 1a — Supabase-sourced plan (preferred)
+            if (planData?.attack_vectors) {
+              const plan = {
+                plan_id: (planData.plan_file_path as string | undefined)
+                  ?.replace(/^.*plan_/, 'plan_').replace(/\.json$/, '') ?? `plan_${Date.now()}`,
+                target_ip: target,
+                context_hash: 'supabase',
+                attack_vectors: planData.attack_vectors,
+                created_at: (planData.created_at as string | undefined) ?? new Date().toISOString(),
+              };
+              console.log(`[worker] Loaded tactical plan from Supabase (${(plan.attack_vectors as unknown[]).length} vectors)`);
+              return await agenticExecutor.runAgentWithTacticalPlan(plan, 'tool');
+            }
+
+            // Strategy 1b — Legacy: load from container-local file (may be absent after restart)
             if (planFilePath) {
               try {
                 const { readFileSync } = await import('fs');
                 const plan = JSON.parse(readFileSync(planFilePath, 'utf-8'));
+                console.log(`[worker] Loaded tactical plan from file: ${planFilePath}`);
                 return await agenticExecutor.runAgentWithTacticalPlan(plan, 'tool');
               } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
                 console.warn(`[worker] Plan file unavailable (${planFilePath}): ${msg} — falling back to free-form loop`);
               }
             }
-            // Fallback: free-form agent loop on the target
+
+            // Fallback — free-form agent loop
             return await agenticExecutor.runAgentLoop(target, 15);
           })();
 
