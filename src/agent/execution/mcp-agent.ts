@@ -151,7 +151,8 @@ export class DualMCPAgent {
     // Use 130 s — above server's EXECUTION_TIMEOUT (120 s) so the subprocess
     // always resolves first and returns a clean "timed out" message rather than
     // the MCP client throwing -32001 mid-execution.
-    const result = await this.kaliClient.callTool({ name, arguments: args }, { timeout: 130_000 });
+    // callTool signature: (params, resultSchema, options)
+    const result = await this.kaliClient.callTool({ name, arguments: args }, undefined, { timeout: 130_000 });
 
     // Extract text content from MCP response
     if (!result.content || !Array.isArray(result.content)) {
