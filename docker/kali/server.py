@@ -84,9 +84,22 @@ def execute_script(filename: str, args: str = "") -> str:
         return f"Error executing script: {e}"
 
 
+def _safe_command(command: str) -> str:
+    """
+    Rewrite commands that can block indefinitely on unreachable hosts.
+    Injects a connect-timeout into nc/netcat invocations that omit -w.
+    """
+    # nc -zv <host> <ports> without -w will block until OS TCP timeout per port.
+    # Inject -w 5 (5-second per-port timeout) when not already specified.
+    if re.search(r'\bnc\b', command) and '-w' not in command:
+        command = re.sub(r'\bnc\b', 'nc -w 5', command, count=1)
+    return command
+
+
 @mcp.tool()
 def execute_shell_cmd(command: str) -> str:
     """Execute an arbitrary shell command inside the Kali container. Returns exit code, stdout, and stderr."""
+    command = _safe_command(command)
     try:
         result = subprocess.run(
             command,
