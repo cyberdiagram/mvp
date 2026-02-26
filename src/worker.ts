@@ -281,13 +281,13 @@ async function main(): Promise<void> {
 
           const agentResult = await (async () => {
             // Strategy 1a — Supabase-sourced plan (preferred)
-            if (planData?.attack_vectors) {
+            if (Array.isArray(planData?.attack_vectors)) {
               const plan = {
                 plan_id: (planData.plan_file_path as string | undefined)
                   ?.replace(/^.*plan_/, 'plan_').replace(/\.json$/, '') ?? `plan_${Date.now()}`,
                 target_ip: target,
                 context_hash: 'supabase',
-                attack_vectors: planData.attack_vectors,
+                attack_vectors: planData.attack_vectors as import('../agent/core/types.js').AttackVector[],
                 created_at: (planData.created_at as string | undefined) ?? new Date().toISOString(),
               };
               console.log(`[worker] Loaded tactical plan from Supabase (${(plan.attack_vectors as unknown[]).length} vectors)`);
