@@ -275,24 +275,20 @@ async function main(): Promise<void> {
 
           const planFilePath = typeof opts.plan_file_path === 'string' ? opts.plan_file_path : null;
 
-          let agentResult;
-          let planLoaded = false;
-          if (planFilePath) {
-            // Strategy 1 — Tool-Based Autonomy with tactical plan
-            try {
-              const { readFileSync } = await import('fs');
-              const plan = JSON.parse(readFileSync(planFilePath, 'utf-8'));
-              agentResult = await agent.agenticExecutor.runAgentWithTacticalPlan(plan, 'tool');
-              planLoaded = true;
-            } catch (err: unknown) {
-              const msg = err instanceof Error ? err.message : String(err);
-              console.warn(`[worker] Plan file unavailable (${planFilePath}): ${msg} — falling back to free-form loop`);
+          const agentResult = await (async () => {
+            if (planFilePath) {
+              try {
+                const { readFileSync } = await import('fs');
+                const plan = JSON.parse(readFileSync(planFilePath, 'utf-8'));
+                return await agent.agenticExecutor.runAgentWithTacticalPlan(plan, 'tool');
+              } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.warn(`[worker] Plan file unavailable (${planFilePath}): ${msg} — falling back to free-form loop`);
+              }
             }
-          }
-          if (!planLoaded) {
             // Fallback: free-form agent loop on the target
-            agentResult = await agent.agenticExecutor.runAgentLoop(target, 15);
-          }
+            return await agent.agenticExecutor.runAgentLoop(target, 15);
+          })();
 
           const result = {
             target,
