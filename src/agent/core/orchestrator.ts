@@ -1373,6 +1373,16 @@ export class PentestAgent {
     this.log('INFO', 'Orchestrator', `Total iterations: ${iteration}`);
     this.log('INFO', 'Orchestrator', `Results collected: ${aggregatedResults.length}`);
 
+    // If no services were discovered the target is unreachable — surface as a
+    // task failure so the worker publishes an error result and the UI shows a
+    // clear message instead of silently completing with empty panels.
+    if (allDiscoveredServices.length === 0) {
+      throw new Error(
+        'Target unreachable: no services or open ports discovered after reconnaissance. ' +
+        'Verify the target IP is correct, the host is online, and you have network connectivity.'
+      );
+    }
+
     // Save any remaining training data
     if (this.config.enableEvaluation && this.trainingPairs.length > 0) {
       await this.saveTrainingData();
