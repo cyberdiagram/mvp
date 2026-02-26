@@ -84,8 +84,9 @@ async function main(): Promise<void> {
   const ragMemoryPath = process.env.RAG_MEMORY_SERVER_PATH;
   const kaliMcpUrl = process.env.KALI_MCP_URL || 'http://localhost:3001';
 
-  // Placeholder for the current task's log channel (set per-task)
+  // Placeholder for the current task's log channel and key (set per-task)
   let currentLogChannel: string | null = null;
+  let currentTaskKey: string | null = null;
 
   const config = {
     anthropicApiKey,
@@ -101,6 +102,12 @@ async function main(): Promise<void> {
         const line = `[${entry.level}][${entry.phase}] ${entry.message}`;
         redis.publish(currentLogChannel, line).catch(() => {});
       }
+    },
+    // Polled between OODA iterations — abort when the task was cancelled via the UI
+    shouldCancel: async (): Promise<boolean> => {
+      if (!currentTaskKey) return false;
+      const state = await redis.hget(currentTaskKey, 'state');
+      return state === 'cancelled';
     },
   };
 
@@ -176,8 +183,9 @@ async function main(): Promise<void> {
       resetGlobalRecorder(cassettePath);
     }
 
-    // Set current log channel for onLog callback
+    // Set per-task context for onLog and shouldCancel callbacks
     currentLogChannel = logChannel;
+    currentTaskKey = taskKey;
 
     // Mark task as running
     await redis.hset(taskKey, 'state', 'running');
@@ -375,6 +383,7 @@ async function main(): Promise<void> {
       );
     } finally {
       currentLogChannel = null;
+      currentTaskKey = null;
     }
 
     console.log(`[worker] Done with task ${taskId}\n`);

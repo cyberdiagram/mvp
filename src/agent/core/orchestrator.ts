@@ -39,6 +39,9 @@ export interface AgentConfig {
   sessionLogsPath?: string;
   /** Optional callback invoked for every structured log entry. Used by worker mode to relay logs to Redis Pub/Sub. */
   onLog?: (entry: LogEntry) => void;
+  /** Optional async callback that returns true when the current task should be aborted.
+   *  Polled between OODA iterations. Throwing `CancelledError` inside is also accepted. */
+  shouldCancel?: () => Promise<boolean>;
 }
 
 /**
@@ -1350,6 +1353,12 @@ export class PentestAgent {
 
             // Small delay between iterations to avoid overwhelming the system
             await new Promise((resolve) => setTimeout(resolve, 500));
+
+            // Poll for external cancellation (e.g. user clicked Cancel in the UI)
+            if (this.config.shouldCancel && await this.config.shouldCancel()) {
+              this.log('INFO', 'Orchestrator', 'Task cancelled — aborting reconnaissance loop');
+              throw new Error('Task cancelled by user');
+            }
 
             // Break out of the while loop if the reasoner indicated completion inside the iteration
             if (aggregatedResults.length > 0 || iteration >= maxIterations) {
