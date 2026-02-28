@@ -86,13 +86,36 @@ def execute_script(filename: str, args: str = "") -> str:
 
 def _safe_command(command: str) -> str:
     """
-    Rewrite commands that can block indefinitely on unreachable hosts.
-    Injects a connect-timeout into nc/netcat invocations that omit -w.
+    Rewrite commands that can block indefinitely on unreachable hosts:
+    1. Injects -w 5 into nc/netcat invocations that omit -w.
+    2. Replaces full-port nmap scans (-p-, -p 1-65535, -p 0-65535) with
+       --top-ports 1000, which covers ~90% of services and fits within
+       the 120-second EXECUTION_TIMEOUT.
+    3. Injects timing flags into nmap UDP scans (-sU) that omit them,
+       so --top-ports scans complete before the timeout fires.
     """
     # nc -zv <host> <ports> without -w will block until OS TCP timeout per port.
     # Inject -w 5 (5-second per-port timeout) when not already specified.
     if re.search(r'\bnc\b', command) and '-w' not in command:
         command = re.sub(r'\bnc\b', 'nc -w 5', command, count=1)
+
+    if re.search(r'\bnmap\b', command):
+        # Full-port specifications (-p-, -p 1-65535, -p 0-65535) always exceed
+        # the 120s timeout. Replace with --top-ports 1000 as a safe fallback.
+        command = re.sub(r'-p\s*-\b', '--top-ports 1000', command)
+        command = re.sub(r'-p\s*[01]-65535\b', '--top-ports 1000', command)
+
+        # UDP scans (-sU) without timing constraints will stall even on
+        # --top-ports 100 (1s default timeout × retries per port).
+        # Inject safe defaults so the scan finishes before EXECUTION_TIMEOUT.
+        if re.search(r'\b-sU\b', command):
+            if '--max-retries' not in command:
+                command += ' --max-retries 1'
+            if not re.search(r'\b-T[0-9]\b', command):
+                command += ' -T4'
+            if '--host-timeout' not in command:
+                command += ' --host-timeout 110s'
+
     return command
 
 

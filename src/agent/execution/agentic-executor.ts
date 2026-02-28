@@ -667,15 +667,19 @@ ${task}`;
     planContext: string
   ): string {
     return `## MISSION
-You are a Senior Penetration Tester executing a structured attack plan.
+You are a Senior Penetration Tester executing a SINGLE attack vector from a structured plan.
 Your objective: Exploit ${cveId} (${attackType}) against ${targetIp} using existing offensive security tools available in the Kali Linux environment.
+
+IMPORTANT: Execute ONLY this specific attack vector. Do NOT perform additional reconnaissance,
+enumerate other services, or deviate to other attack vectors. Other vectors are being handled
+by separate executor instances in parallel.
 
 ## TACTICAL PLAN CONTEXT
 ${planContext}
 
 ## EXECUTION STRATEGY: Tool-Based Exploitation
 
-### Step 1: Reconnaissance & Tool Selection
+### Step 1: Tool Selection
 - Search for known exploits: execute_shell_cmd("searchsploit ${cveId}")
 - Check Metasploit database: execute_shell_cmd("msfconsole -q -x 'search ${cveId}; exit'")
 - If searchsploit finds results, mirror the exploit: execute_shell_cmd("searchsploit -m <exploit-id>")
@@ -698,6 +702,7 @@ ${planContext}
 - Save detailed results to /app/logs/
 
 ## CONSTRAINTS
+- Execute ONLY the vector described above — do not scan or attack other ports/services
 - Always use non-interactive tool execution (no interactive shells)
 - For msfconsole, ALWAYS use: msfconsole -q -x '<commands separated by semicolons>; exit'
 - Do not guess parameters — use the tactical plan context above
@@ -714,6 +719,10 @@ ${planContext}
     return `## MISSION
 You are a Senior Penetration Tester searching for and adapting public proof-of-concept exploits.
 Your objective: Find a working PoC for ${cveId} (${attackType}) on GitHub, adapt it for ${targetIp}, and execute it.
+
+IMPORTANT: Execute ONLY this specific attack vector. Do NOT perform additional reconnaissance,
+enumerate other services, or deviate to other attack vectors. Other vectors are being handled
+by separate executor instances in parallel.
 
 ## TACTICAL PLAN CONTEXT
 ${planContext}

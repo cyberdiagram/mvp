@@ -561,6 +561,42 @@ nmap -Pn --script vuln -p 445 192.168.1.10 -oA scans/vulnerability/smb_vulns
 
 ## Common Mistakes to Avoid
 
+### ❌ Mistake 0a: UDP Scans Without Timing Flags
+
+> **ALWAYS include `--max-retries 1 -T4 --host-timeout 110s` on every `-sU` command.**
+> UDP probes use a 1-second timeout per port by default. Without retries and host-timeout
+> limits, even `--top-ports 20` can stall for 2+ minutes. The MCP timeout is a hard 120s.
+
+```bash
+# BAD — will timeout even with only 20 ports:
+nmap -Pn -sU --top-ports 20 192.168.1.10
+
+# GOOD — always include all three flags for UDP scans:
+nmap -Pn -sU --top-ports 20 --max-retries 1 -T4 --host-timeout 110s 192.168.1.10
+```
+
+**Maximum safe UDP top-ports is 20.** Higher counts (50, 100) will still timeout without
+`--host-timeout`. With the three required flags, 20 ports completes in ~10-30 seconds.
+
+---
+
+### ❌ Mistake 0b: ACK Scans Without Port Limit
+
+> **NEVER run an ACK scan without an explicit `--top-ports` or `-p <ports>` limit.**
+> ACK scans (`-sA`) are used for firewall mapping, not service discovery. Running one
+> without a port limit implies `-p-` (all 65535 ports) which always exceeds the timeout.
+
+```bash
+# BAD — equivalent to -p-, will timeout:
+nmap -Pn -sA 192.168.1.10
+
+# GOOD — limit to specific known ports or top ports:
+nmap -Pn -sA --top-ports 100 -T4 192.168.1.10
+nmap -Pn -sA -p 22,80,443,8080 192.168.1.10
+```
+
+---
+
 ### ❌ Mistake 0: Scanning All 65535 Ports (ANY form)
 
 > **HARD RULE — NO EXCEPTIONS**: Any nmap command that scans all or nearly all ports
@@ -764,8 +800,9 @@ nmap -Pn --script vuln -p 80,443 192.168.1.10
 # Stealth Scan - use -Pn since host is confirmed up
 nmap -Pn -sS -T2 -f 192.168.1.10
 
-# UDP Scan (slow but important) - use -Pn since host is confirmed up
-nmap -Pn -sU --top-ports 100 192.168.1.10
+# UDP Scan — MUST include --max-retries 1 -T4 --host-timeout 110s to fit in 120s timeout
+# MAXIMUM safe value is --top-ports 20; higher counts will stall without host-timeout
+nmap -Pn -sU --top-ports 20 --max-retries 1 -T4 --host-timeout 110s 192.168.1.10
 
 # Output All Formats - use -Pn since host is confirmed up
 nmap -Pn -oA scan_results 192.168.1.10

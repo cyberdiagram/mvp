@@ -319,7 +319,8 @@ async function main(): Promise<void> {
             return await agenticExecutor.runAgentLoop(target, 15);
           })();
 
-          const result = {
+          const vectorId = typeof opts.vector_id === 'string' ? opts.vector_id : null;
+          const result: Record<string, unknown> = {
             target,
             plan_file_path: planFilePath ?? null,
             turns_used: agentResult.turnsUsed,
@@ -327,6 +328,7 @@ async function main(): Promise<void> {
             final_text: agentResult.finalText,
             completed_at: new Date().toISOString(),
           };
+          if (vectorId) result.vector_id = vectorId;
 
           const pipeline = redis.pipeline();
           pipeline.hset(taskKey, 'state', 'completed');
