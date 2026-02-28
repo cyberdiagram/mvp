@@ -3,7 +3,7 @@
  *
  * Reads session_data injected by Cyber-Bridge (target profile, discovered
  * services, vulnerabilities, tactical plans, execution summary) and calls
- * Claude to produce a structured 5-section Huawei-style report plus three
+ * Claude to produce a structured 5-section professional report plus three
  * interactive arrays (remediation snippets, compliance findings, anti-patterns).
  */
 
@@ -46,7 +46,7 @@ export interface ReportPayload {
 
 // ── Prompt ────────────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are a senior penetration tester writing a professional report following the Huawei Cloud Security Services standard.
+const SYSTEM_PROMPT = `You are a senior penetration tester writing a professional penetration test report.
 
 Produce a complete 5-section markdown report plus structured JSON arrays.
 
