@@ -442,8 +442,8 @@ export class ReasonerAgent {
     );
     // ─────────────────────────────────────────────────────────────────────────
 
-    const assistantMessage = response.content[0];
-    if (assistantMessage.type !== 'text') {
+    const assistantMessage = response.content.find((b) => b.type === 'text');
+    if (!assistantMessage || assistantMessage.type !== 'text') {
       throw new Error('Expected text response from Reasoner');
     }
 
