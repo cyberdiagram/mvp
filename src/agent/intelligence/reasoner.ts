@@ -11,7 +11,7 @@ import { ReasonerOutput, IntelligenceContext, TacticalPlanObject } from '../core
 import { createAnthropicClient } from '../utils/llm-recorder.js';
 
 /** Model used for strategic reasoning - Sonnet for best decision quality */
-export const REASONER_MODEL = 'claude-sonnet-4-20250514';
+export const REASONER_MODEL = 'claude-sonnet-5';
 
 /** Max tokens for Reasoner responses - enough for detailed analysis */
 export const REASONER_MAX_TOKENS = 4000;
